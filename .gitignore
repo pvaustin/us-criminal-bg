@@ -1,0 +1,7 @@
+# Local Python
+__pycache__/
+*.py[cod]
+
+# Databricks / operator secrets and exports — never commit
+.databrickscfg
+.env
