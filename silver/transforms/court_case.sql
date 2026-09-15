@@ -6,11 +6,18 @@
 -- Apply after silver/schemas/court_case.sql.
 -- Re-run is safe: court_case upserts on (source_system, state_code, source_record_id);
 -- a new transform_run row is appended each attempt.
+--
+-- transform_run_id is materialized once into a 1-row Delta table. A TEMP VIEW
+-- over uuid()/current_timestamp() is re-evaluated on every query, and Databricks
+-- SQL warehouses reject UPDATE ... WHERE col = (SELECT uuid() ...) with
+-- INVALID_NON_DETERMINISTIC_EXPRESSIONS.
 
 CREATE CATALOG IF NOT EXISTS us_criminal_bg;
 CREATE SCHEMA IF NOT EXISTS us_criminal_bg.silver;
 
-CREATE OR REPLACE TEMP VIEW silver_this_transform_run AS
+CREATE OR REPLACE TABLE us_criminal_bg.silver._this_transform_run
+USING DELTA
+AS
 SELECT
   uuid() AS transform_run_id,
   concat('all_all_', date_format(current_timestamp(), 'yyyyMMdd_HHmmss'), 'Z') AS transform_run_label,
@@ -41,7 +48,7 @@ SELECT
   CAST(NULL AS BIGINT),
   'silver.court_case.v1',
   'spark_sql identifiers_only; HTML facts left null'
-FROM silver_this_transform_run;
+FROM us_criminal_bg.silver._this_transform_run;
 
 CREATE OR REPLACE TEMP VIEW silver_court_case_staged AS
 WITH ranked AS (
@@ -169,7 +176,7 @@ SELECT
   current_timestamp() AS transformed_at,
   r.transform_run_id
 FROM norm n
-CROSS JOIN silver_this_transform_run r;
+CROSS JOIN us_criminal_bg.silver._this_transform_run r;
 
 MERGE INTO us_criminal_bg.silver.court_case AS t
 USING silver_court_case_staged AS s
@@ -238,9 +245,21 @@ WHEN NOT MATCHED THEN INSERT (
   s.transform_run_id
 );
 
+-- Finalize using the materialized id (constant row), not a uuid() temp view.
+-- row_count is taken from court_case rows stamped with this run id (MERGE target),
+-- so the UPDATE subquery does not re-evaluate the staged view's current_timestamp().
 UPDATE us_criminal_bg.silver.transform_run t
 SET
   finished_at = current_timestamp(),
   status = 'succeeded',
-  row_count = (SELECT count(*) FROM silver_court_case_staged)
-WHERE t.transform_run_id = (SELECT transform_run_id FROM silver_this_transform_run);
+  row_count = (
+    SELECT count(*)
+    FROM us_criminal_bg.silver.court_case c
+    WHERE c.transform_run_id = t.transform_run_id
+  )
+WHERE t.status = 'running'
+  AND t.transform_run_id IN (
+    SELECT transform_run_id FROM us_criminal_bg.silver._this_transform_run
+  );
+
+DROP TABLE IF EXISTS us_criminal_bg.silver._this_transform_run;

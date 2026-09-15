@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS us_criminal_bg.silver.court_case (
   filed_date DATE,
   caption STRING,
   payload_parse_status STRING NOT NULL,
+  -- Databricks SQL requires an ARRAY element type (ARRAY<STRING>, not bare ARRAY).
   dq_flags ARRAY<STRING> NOT NULL,
   silver_schema_version STRING NOT NULL,
   transformed_at TIMESTAMP NOT NULL,
