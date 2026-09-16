@@ -57,8 +57,8 @@ Employer (default) can run a WI WCCA-sourced check on a hiring subject and get a
 1. Order stores subject name (required) and DOB (optional).
 2. Every search/match attempt logs who (operator id/email string), subject snapshot (name + optional DOB only), timestamp, query params, returned set (including empty / no-link). **No secrets in the log.**
 
-### AC4 — Report view (regression)
-Case/charge/provenance; explicit empty state; report-by-source-key remains valid until match decisions exist. Dispute / full consent productization out of this slice.
+### AC4 — Report view (regression) ✅ Accepted 2026-09-16
+**Accepted** at smoke level for pilot/demo: report / order / review / audit paths exercised in-pilot; no further blocking regression required for this MVP increment. Ongoing regression check when those surfaces change. See `06-ac4-acceptance.md`.
 
 ### AC5 — Brian gate
 No new Brian work unless more Bronze samples are needed. Weekly/bulk stay paused.
@@ -70,3 +70,15 @@ Multi-state, CRA claims, certified history, invented records, weekly enable, com
 ## Product decision (locked)
 
 **Primary beachhead:** Wisconsin employers / HR / hiring managers (locked 2026-09-15). Staffing = Next; individuals = Later.
+
+## Pilot data plane (updated 2026-09-16)
+
+Beachhead is still **WI employers/HR**. For the **pilot**, searchable named corpus includes:
+
+| Source | Role in pilot |
+| --- | --- |
+| **WI WCCA** | Product path (circuit court dockets) |
+| **SF HF named corpus** | **In pilot** for match/review (alongside WI) — must be labeled honestly as third-party HF redistribution; not certified criminal history |
+| **VA VirginiaCourtData** | In-scope when Prasanth’s free research access is approved — **not blocking** pilot close |
+
+UI must show **pilot source (WI | SF)** on relevant surfaces. Provenance ≠ verdict; no hire/no-hire; no FCRA adverse-action claims.

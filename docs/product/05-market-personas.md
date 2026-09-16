@@ -81,4 +81,6 @@ Public estimates for US employment / background screening vary by scope; treat a
 
 Staffing = Next · Individuals = Later.
 
+**Pilot data (2026-09-16):** WI WCCA + SF HF named corpus in pilot for match/review. SF does **not** change the beachhead — it widens pilot corpus with honest source labeling. VA when free research access approved (non-blocking).
+
 Optional still open (not blocking): paid WCCA API timing; any hard “never claim X” lines for demos.

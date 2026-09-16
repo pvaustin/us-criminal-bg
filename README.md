@@ -37,6 +37,7 @@ Product concept, PRD sketch, roadmap, strategy, and market personas live in [`do
 - Roadmap: [`docs/product/03-roadmap.md`](docs/product/03-roadmap.md)
 - Strategy: [`docs/product/04-strategy.md`](docs/product/04-strategy.md)
 - Market + personas: [`docs/product/05-market-personas.md`](docs/product/05-market-personas.md)
+- AC4 acceptance: [`docs/product/06-ac4-acceptance.md`](docs/product/06-ac4-acceptance.md)
 
 ## Databricks (non-secret)
 

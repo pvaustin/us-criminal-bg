@@ -8,8 +8,10 @@
 - **AC1 ✅** — Silva: `court_party` + match/review contract landed (PR #5; live prove; `MATCH_REVIEW.md` names `match_decision` store).
 - **AC2 (in brief)** — Uma: review-queue UI on party matches.
 - **AC3** — Persist subject on order + auditable search log.
-- **AC4 regression** — Keep live report + metrics healthy (case/charge/provenance).
-- **AC5 gate** — Brian idle unless sample gaps; weekly ingest paused; free-site bulk deferred.
+- **AC1–AC3 ✅** — Engineering bar complete (per Charlie: web + pipeline merges).
+- **AC4 ✅** — Accepted 2026-09-16 (smoke-level pilot/demo; see `06-ac4-acceptance.md`).
+- **AC5 gate** — Brian as needed for samples / research loaders; weekly free-site ingest paused; free-site bulk deferred.
+- **Pilot corpora** — WI WCCA + **SF HF named corpus** (match/review) in pilot; VA when free research access approved (non-blocking).
 
 ## Next
 
