@@ -447,30 +447,70 @@ class ParseHtmlSsrTests(unittest.TestCase):
 
 
 class SqlSsrRegexTests(unittest.TestCase):
-    """Python stand-ins for the warehouse SQL regexes (Java-compatible subset)."""
+    """Python stand-ins for warehouse SQL regexes (must stay in lockstep with
+    silver/transforms/court_case.sql). Databricks regexp_extract is first-match
+    and drops trailing [0-9]* inside the same capture group.
+    """
 
     SQL_CAPTION = re.compile(
         r"(?i)(State of Wisconsin vs\.? .+?)(?= Case summary| Filing date|"
         r" Case type| Case status| Defendant| Charges| Count no\.|$)"
     )
     SQL_CHARGE_SPLIT = re.compile(
-        r"(?=[0-9]+ [0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*[0-9]*)"
+        r"(?=[0-9]+ [0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*(?:[0-9]+)?)"
     )
-    SQL_STATUTE = re.compile(
-        r"^[0-9]+ ([0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*[0-9]*)"
+    # Warehouse: concat(base parens, trailing digits as their own group).
+    SQL_STATUTE_BASE = re.compile(
+        r"^[0-9]+ ([0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*)"
+    )
+    SQL_STATUTE_TRAIL = re.compile(
+        r"^[0-9]+ [0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*([0-9]+)"
     )
     SQL_STATUTE_PREFIX = re.compile(
-        r"^[0-9]+ [0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*[0-9]*\s+"
+        r"^[0-9]+ [0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*"
     )
-    SQL_SEVERITY_LAST = re.compile(
-        r".*(Misd\. [A-IU]|Felony [A-IU]|Misdemeanor [A-IU]|Misd\.|"
-        r"Felony|Misdemeanor|Forfeiture|Ordinance)\b",
+    SQL_STATUTE_LEFTOVER_DIGIT = re.compile(r"^[0-9]+")
+    SQL_SEVERITY_CLASS = re.compile(
+        r".*\s((?:Felony|Misd\.|Forfeiture|Ordinance) [A-IU])(?:\s|$)",
+        re.DOTALL,
+    )
+    SQL_SEVERITY_MISDEMEANOR_CLASS = re.compile(
+        r".*\s(Misdemeanor [A-IU])(?:\s|$)",
+        re.DOTALL,
+    )
+    SQL_SEVERITY_BARE = re.compile(
+        r".*\s(Misd\.|Felony|Misdemeanor|Forfeiture|Ordinance)(?:\s|$)",
         re.DOTALL,
     )
     SQL_SEVERITY_STRIP = re.compile(
-        r"\s+(Misd\. [A-IU]|Felony [A-IU]|Misdemeanor [A-IU]|Misd\.|"
-        r"Felony|Misdemeanor|Forfeiture|Ordinance)\b.*$"
+        r"\s+((?:Misd\.|Felony|Forfeiture|Ordinance) [A-IU]|Misd\.|"
+        r"Felony|Misdemeanor|Forfeiture|Ordinance)(?:\s|$).*$"
     )
+
+    @classmethod
+    def sql_statute(cls, raw: str) -> str:
+        base = cls.SQL_STATUTE_BASE.match(raw)
+        trail = cls.SQL_STATUTE_TRAIL.match(raw)
+        return (base.group(1) if base else "") + (trail.group(1) if trail else "")
+
+    @classmethod
+    def sql_severity(cls, raw: str) -> str | None:
+        for pattern in (
+            cls.SQL_SEVERITY_CLASS,
+            cls.SQL_SEVERITY_MISDEMEANOR_CLASS,
+            cls.SQL_SEVERITY_BARE,
+        ):
+            match = pattern.search(raw)
+            if match and match.group(1):
+                return match.group(1)
+        return None
+
+    @classmethod
+    def sql_description(cls, raw: str) -> str:
+        stripped = cls.SQL_STATUTE_PREFIX.sub("", raw, count=1)
+        stripped = cls.SQL_STATUTE_LEFTOVER_DIGIT.sub("", stripped, count=1)
+        stripped = cls.SQL_SEVERITY_STRIP.sub("", stripped)
+        return stripped.strip()
 
     def test_sql_caption_regex_stops_at_case_summary(self) -> None:
         collapsed = (
@@ -500,20 +540,32 @@ class SqlSsrRegexTests(unittest.TestCase):
         ]
         self.assertEqual(len(parts), 8)
         self.assertTrue(parts[0].startswith("1 "))
-        statute = self.SQL_STATUTE.match(parts[0])
-        self.assertIsNotNone(statute)
-        self.assertEqual(statute.group(1), "999.41(1m)(hm)3")
-        desc = self.SQL_SEVERITY_STRIP.sub(
-            "", self.SQL_STATUTE_PREFIX.sub("", parts[0])
-        ).strip()
-        self.assertEqual(desc, "Synthetic intent drugs(>10-50g)")
-        self.assertNotIn("999.41", desc)
-        self.assertEqual(self.SQL_SEVERITY_LAST.search(parts[4]).group(1), "Misd. A")
-        self.assertEqual(self.SQL_SEVERITY_LAST.search(parts[5]).group(1), "Misd. A")
-        self.assertEqual(self.SQL_SEVERITY_LAST.search(parts[6]).group(1), "Misd. U")
-        self.assertEqual(self.SQL_SEVERITY_LAST.search(parts[7]).group(1), "Felony D")
-        self.assertNotEqual(
-            self.SQL_SEVERITY_LAST.search(parts[4]).group(1), "Misdemeanor M"
+        # Base capture stops at last paren (warehouse behavior); trail group is 3.
+        self.assertEqual(self.SQL_STATUTE_BASE.match(parts[0]).group(1), "999.41(1m)(hm)")
+        self.assertEqual(self.SQL_STATUTE_TRAIL.match(parts[0]).group(1), "3")
+        self.assertEqual(self.sql_statute(parts[0]), "999.41(1m)(hm)3")
+        self.assertEqual(
+            self.sql_description(parts[0]), "Synthetic intent drugs(>10-50g)"
+        )
+        self.assertNotIn("999.41", self.sql_description(parts[0]))
+        self.assertEqual(self.sql_severity(parts[0]), "Felony")
+        self.assertEqual(self.sql_severity(parts[4]), "Misd. A")
+        self.assertEqual(self.sql_severity(parts[5]), "Misd. A")
+        self.assertEqual(self.sql_severity(parts[6]), "Misd. U")
+        self.assertEqual(self.sql_severity(parts[7]), "Felony D")
+        self.assertNotEqual(self.sql_severity(parts[4]), "Misdemeanor M")
+        live_shape = (
+            "5 999.49(1)(a) Synthetic bail jumping-Misdemeanor Misd. A"
+        )
+        self.assertEqual(self.sql_severity(live_shape), "Misd. A")
+        self.assertNotEqual(self.sql_severity(live_shape), "Misdemeanor M")
+        live_c1 = (
+            "1 961.41(1m)(hm)3 Possess w/Intent-Designer Drugs(>10-50g) Felony"
+        )
+        self.assertEqual(self.sql_statute(live_c1), "961.41(1m)(hm)3")
+        self.assertEqual(
+            self.sql_description(live_c1),
+            "Possess w/Intent-Designer Drugs(>10-50g)",
         )
 
 

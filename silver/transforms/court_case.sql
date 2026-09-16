@@ -239,7 +239,7 @@ extracted AS (
             )
           ELSE ''
         END,
-        '(?=[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*[0-9]*)'
+        '(?=[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*(?:[0-9]+)?)'
       ),
       x -> trim(x) RLIKE '^[0-9]+ [0-9]{3}\\.[0-9]{2,4}'
     ) AS charge_raws
@@ -422,26 +422,63 @@ SELECT
   s.state_code,
   s.source_record_id,
   CAST(regexp_extract(trim(x.charge_raw), '^([0-9]+)', 1) AS INT) AS charge_count,
-  regexp_extract(
-    trim(x.charge_raw),
-    '^[0-9]+ ([0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*[0-9]*)',
-    1
+  -- Statute: base parens + optional trailing digits as a SEPARATE capture.
+  -- Databricks regexp_extract drops trailing [0-9]* inside the same group
+  -- (live: 961.41(1m)(hm) without the 3). Concat group2 onto group1.
+  concat(
+    regexp_extract(
+      trim(x.charge_raw),
+      '^[0-9]+ ([0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*)',
+      1
+    ),
+    regexp_extract(
+      trim(x.charge_raw),
+      '^[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*([0-9]+)',
+      1
+    )
   ) AS statute,
   trim(
     regexp_replace(
       regexp_replace(
-        trim(x.charge_raw),
-        '^[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*[0-9]*\\s+',
+        regexp_replace(
+          trim(x.charge_raw),
+          '^[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*',
+          ''
+        ),
+        '^[0-9]+',
         ''
       ),
-      '\\s+(Misd\\. [A-IU]|Felony [A-IU]|Misdemeanor [A-IU]|Misd\\.|Felony|Misdemeanor|Forfeiture|Ordinance)\\b.*$',
+      '\\s+((?:Misd\\.|Felony|Forfeiture|Ordinance) [A-IU]|Misd\\.|Felony|Misdemeanor|Forfeiture|Ordinance)(?:\\s|$).*$',
       ''
     )
   ) AS description,
-  regexp_extract(
-    trim(x.charge_raw),
-    '.*(Misd\\. [A-IU]|Felony [A-IU]|Misdemeanor [A-IU]|Misd\\.|Felony|Misdemeanor|Forfeiture|Ordinance)\\b',
-    1
+  -- Last whitespace-bounded severity token (not Jumping-Misdemeanor).
+  -- Do not use Misdemeanor+[A-IU] — that yields Misdemeanor M from Misd. A.
+  coalesce(
+    nullif(
+      regexp_extract(
+        trim(x.charge_raw),
+        '.*\\s((?:Felony|Misd\\.|Forfeiture|Ordinance) [A-IU])(?:\\s|$)',
+        1
+      ),
+      ''
+    ),
+    nullif(
+      regexp_extract(
+        trim(x.charge_raw),
+        '.*\\s(Misdemeanor [A-IU])(?:\\s|$)',
+        1
+      ),
+      ''
+    ),
+    nullif(
+      regexp_extract(
+        trim(x.charge_raw),
+        '.*\\s(Misd\\.|Felony|Misdemeanor|Forfeiture|Ordinance)(?:\\s|$)',
+        1
+      ),
+      ''
+    )
   ) AS severity,
   CAST(NULL AS STRING) AS modifier_statute,
   CAST(NULL AS STRING) AS modifier_text,

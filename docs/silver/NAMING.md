@@ -206,5 +206,5 @@ Bump `silver_schema_version` when Silver columns or parse-status/flag vocabulari
 
 ### Changelog
 
-- `2026-09-16` — `silver.court_case.v2` + `silver.court_charge.v1`: HTML SSR parser for caption / filed_date / case_status / county_name / charges; statuses `html_ssr_v1` and `html_ssr_partial`. Caption stops before `Case summary`. Charge rows split on count+statute so descriptions may contain `>`.
+- `2026-09-16` — `silver.court_case.v2` + `silver.court_charge.v1`: HTML SSR parser. Caption stops before `Case summary`. Statutes keep trailing digits after parens (`(hm)3`). Severity is the exact grid token (`Misd. A`, `Felony D`).
 - `2026-09-15` — Initial national-first Silver contract (MVP: `court_case` + `transform_run`, WCCA identifiers).
