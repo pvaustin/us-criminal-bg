@@ -1,7 +1,13 @@
 # Local Python
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
 
 # Databricks / operator secrets and exports — never commit
 .databrickscfg
 .env
+*.html
+!sources/wcca/tests/fixtures/*.html
