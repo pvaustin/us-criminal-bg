@@ -3,11 +3,11 @@
 **Owner:** silva silver (schema) / Uma (web writes)  
 **Catalog:** `us_criminal_bg.silver`  
 **DDL:** [`silver/schemas/order_subject.sql`](../../silver/schemas/order_subject.sql) · [`silver/schemas/search_audit.sql`](../../silver/schemas/search_audit.sql)  
-**Related:** [`MATCH_REVIEW.md`](MATCH_REVIEW.md) (`match_decision`, review queue) · [`COURT_PARTY.md`](COURT_PARTY.md)
+**Related:** [`MATCH_REVIEW.md`](MATCH_REVIEW.md) (`match_decision`, review queue) · [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md) · [`COURT_PARTY.md`](COURT_PARTY.md)
 
 Pilot tables so Uma can persist the **employer order subject** and an **auditable search log**. This is not a court-fact transform. It does **not** scrape, does **not** invent court records, does **not** add a scoring job, and does **not** produce hire / no-hire or FCRA packages.
 
-The web app may `CREATE TABLE IF NOT EXISTS` (same pattern as the named `match_decision` store). Warehouse apply of this DDL is **operator-side**; the cloud agent that opened this PR does **not** apply it.
+The web app may `CREATE TABLE IF NOT EXISTS` (same pattern as `match_decision`). Warehouse apply of this DDL is **operator-side**; the cloud agent that opened this PR does **not** apply it. `match_decision` DDL lives in [`silver/schemas/match_decision.sql`](../../silver/schemas/match_decision.sql).
 
 ## Purpose
 

@@ -1,19 +1,57 @@
 """Design-sketch scorer for docs/silver/MATCH_REVIEW.md.
 
-Not a Databricks job. Not silent auto-link. Not a hire/FCRA decision.
-Synthetic names only. Uma can call the same helpers in UI unit tests.
+Not silent auto-link. Not a hire/FCRA decision. Synthetic names only.
+Uma can call the same helpers in UI unit tests. SF research jobs wrap these
+bands; they must not invent a parallel auto/review/no-link system.
+
+The Databricks scoring job for SF name-only experiments lives in
+`match_decision_sf_research.py` / `.sql` and only INSERTs suggestion rows.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
-from typing import Any, Mapping
+from datetime import date, datetime, timezone
+from typing import Any, Iterable, Mapping, Sequence
+from uuid import uuid4
 
 from sources.wcca.parse import split_person_name
 
 MATCHABLE_ROLES = frozenset({"defendant", "aka"})
 REVIEW_MIN = 50
+ACTOR_SUGGESTION = "system:suggestion"
+REVIEW_STATUS_SUGGESTION = "suggestion"
+REVIEW_STATUS_HUMAN = "human"
+PERSIST_BANDS_DEFAULT = frozenset({"auto", "review"})
+
+# Stable Uma query/API contract (flat match_decision row = one candidate card).
+# Nested `candidates[]` is a query grouping by subject_ref, not a table column.
+UMA_CONTRACT_FIELDS = (
+    "subject_ref",
+    "subject_name",
+    "subject_dob",
+    "party_key",
+    "party_role",
+    "party_ordinal",
+    "raw_name",
+    "name_last",
+    "name_first",
+    "name_middle",
+    "confidence_band",
+    "score",
+    "reasons",
+    "source_system",
+    "state_code",
+    "source_record_id",
+    "ingest_run_id",
+    "payload_sha256",
+    "transform_run_id",
+    "case_report_key",
+    "decision_id",
+    "decided_at",
+    "actor",
+    "review_status",
+)
 
 
 @dataclass(frozen=True)
@@ -73,7 +111,11 @@ def _parse_dob(value: Any) -> date | None:
 def parse_subject_name(
     name: str | None,
 ) -> tuple[str | None, str | None, str | None]:
-    """Employer subject names: `Last, First M` or `First [Middle] Last`."""
+    """Employer / search subject names: `Last, First M` or `First [Middle] Last`.
+
+    First-Last (space-separated) is required for SF HF research subjects; the
+    comma form is the WI WCCA caption style. Unparseable last → no-link.
+    """
     collapsed = _collapse(name)
     if collapsed is None:
         return None, None, None
@@ -86,6 +128,43 @@ def parse_subject_name(
     if len(tokens) == 2:
         return tokens[1], tokens[0], None
     return tokens[-1], tokens[0], " ".join(tokens[1:-1])
+
+
+def norm_name_token(value: str | None) -> str | None:
+    """Alphanumeric upper token used for last-name retrieval and scoring."""
+    return _norm_token(value)
+
+
+def normalized_last_name_from_subject(subject: Mapping[str, Any]) -> str | None:
+    name = subject.get("name")
+    if name is None:
+        name = subject.get("subject_name")
+    last, _first, _middle = parse_subject_name(name)
+    return _norm_token(last)
+
+
+def normalized_last_name_from_party(party: Mapping[str, Any]) -> str | None:
+    """Prefer Silver `name_last`; fall back to comma split then First-Last raw."""
+    last = _norm_token(party.get("name_last"))
+    if last:
+        return last
+    raw = _collapse(party.get("raw_name"))
+    comma_last = _norm_token(split_person_name(raw)[0])
+    if comma_last:
+        return comma_last
+    space_last, _first, _middle = parse_subject_name(raw)
+    return _norm_token(space_last)
+
+
+def retrieve_candidates_by_last_name(
+    subject: Mapping[str, Any],
+    parties: Iterable[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Last-name equality (normalized) only — never a full cartesian product."""
+    key = normalized_last_name_from_subject(subject)
+    if not key:
+        return []
+    return [p for p in parties if normalized_last_name_from_party(p) == key]
 
 
 def party_key(party: Mapping[str, Any], *, role: str = "", ordinal: int = 0) -> str:
@@ -262,3 +341,108 @@ def required_provenance(party: Mapping[str, Any], sketch: MatchSketch) -> dict[s
         "band": sketch.band,
         "reasons": list(sketch.reasons),
     }
+
+
+def _subject_name(subject: Mapping[str, Any]) -> str | None:
+    name = subject.get("name")
+    if name is None:
+        name = subject.get("subject_name")
+    return _collapse(name)
+
+
+def _subject_dob(subject: Mapping[str, Any]) -> date | None:
+    if "dob" in subject:
+        return _parse_dob(subject.get("dob"))
+    return _parse_dob(subject.get("subject_dob"))
+
+
+def match_decision_row(
+    subject: Mapping[str, Any],
+    party: Mapping[str, Any],
+    sketch: MatchSketch,
+    *,
+    decision_id: str | None = None,
+    decided_at: datetime | None = None,
+    actor: str = ACTOR_SUGGESTION,
+    review_status: str = REVIEW_STATUS_SUGGESTION,
+    experiment_tag: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Flat append row for `us_criminal_bg.silver.match_decision`.
+
+    Suggestion-only when `actor=system:suggestion`. Never a hire / FCRA payload.
+    """
+    prov = required_provenance(party, sketch)
+    ts = decided_at or datetime.now(timezone.utc)
+    return {
+        "decision_id": decision_id or str(uuid4()),
+        "subject_ref": str(subject.get("subject_ref") or ""),
+        "subject_name": _subject_name(subject),
+        "subject_dob": _subject_dob(subject),
+        "party_key": prov["party_key"],
+        "source_system": prov["source_system"],
+        "state_code": prov["state_code"],
+        "source_record_id": prov["source_record_id"],
+        "party_role": prov["party_role"],
+        "party_ordinal": prov["party_ordinal"],
+        "raw_name": prov["raw_name"],
+        "name_last": prov["name_last"],
+        "name_first": prov["name_first"],
+        "name_middle": prov["name_middle"],
+        "confidence_band": sketch.band,
+        "score": sketch.score,
+        "reasons": list(sketch.reasons),
+        "score_or_reason_codes": list(prov["score_or_reason_codes"]),
+        "ingest_run_id": prov["ingest_run_id"],
+        "payload_sha256": prov["payload_sha256"],
+        "transform_run_id": prov["transform_run_id"],
+        "case_report_key": prov["case_report_key"],
+        "review_status": review_status,
+        "experiment_tag": experiment_tag,
+        "notes": notes,
+        "decided_at": ts,
+        "actor": actor,
+    }
+
+
+def suggestion_rows_for_subject(
+    subject: Mapping[str, Any],
+    parties: Sequence[Mapping[str, Any]],
+    *,
+    persist_bands: Iterable[str] = PERSIST_BANDS_DEFAULT,
+    persist_no_link: bool = False,
+    actor: str = ACTOR_SUGGESTION,
+    review_status: str = REVIEW_STATUS_SUGGESTION,
+    experiment_tag: str | None = None,
+    notes: str | None = None,
+    decided_at: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Retrieve by last name, score with MATCH_REVIEW bands, build append rows.
+
+    Default persists `review` and `auto` only. Last-name mismatches are not
+    retrieved (no cartesian). Optional `persist_no_link` keeps last-name-equal
+    negatives (e.g. first-name mismatch) for warehouse prove.
+    """
+    allowed = frozenset(persist_bands)
+    ts = decided_at or datetime.now(timezone.utc)
+    rows: list[dict[str, Any]] = []
+    for party in retrieve_candidates_by_last_name(subject, parties):
+        sketch = score_subject_against_party(subject, party)
+        if sketch.band == "no-link":
+            if not persist_no_link:
+                continue
+        elif sketch.band not in allowed:
+            continue
+        rows.append(
+            match_decision_row(
+                subject,
+                party,
+                sketch,
+                decided_at=ts,
+                actor=actor,
+                review_status=review_status,
+                experiment_tag=experiment_tag,
+                notes=notes,
+            )
+        )
+    return rows

@@ -19,7 +19,7 @@ Warehouse apply is **coordinator-side**. This repo lands parser + SQL/Python + t
 | WI WCCA Silver path | `sources/wcca/*` and `silver/transforms/court_case.*` stay untouched |
 | Invented parties | Blank `defendant_name` → **no row** (not a synthetic name) |
 | Hire / no-hire, adverse-action UI | Research experiments only |
-| `match_decision` table | Named in MATCH_REVIEW; **not created** |
+| `match_decision` table | Named in MATCH_REVIEW; created for SF name-only suggestions in [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md) |
 | `court_case` / `court_charge` for SF | Isolated party sketch; not required for this path |
 | Court scrape | Consume Bronze JSON only |
 | Live PII in git | Identifier-only live grain; synthetic names in tests |
@@ -94,7 +94,7 @@ This job does **not** widen `silver/transforms/court_case.sql` (WCCA). Keep runn
 
 ## Match / review experiments
 
-[`MATCH_REVIEW.md`](MATCH_REVIEW.md) can score `party_role=defendant` on these rows. Every SF defendant is `dob_absent` → **review** (never invent a date; never `auto`). This is **not** the WI employer review queue and not a hire engine. `match_decision` is still **not created**.
+[`MATCH_REVIEW.md`](MATCH_REVIEW.md) scores `party_role=defendant` on these rows with the **same** bands. Every SF defendant is `dob_absent` → **review** (never invent a date; **never `auto`**). This is **not** the WI employer review queue and not a hire engine. Experiment job + Uma contract: [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md).
 
 ## Tests (local)
 
