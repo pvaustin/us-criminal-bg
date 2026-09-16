@@ -51,10 +51,17 @@ _SCRIPT_STYLE_RE = re.compile(
     r"(?is)<(script|style|noscript)\b[^>]*>.*?</\1>"
 )
 _BLOCK_TO_NL_RE = re.compile(
-    r"(?i)<br\s*/?>|</(?:p|div|tr|h[1-6]|li|table|thead|tbody|section|header|"
+    r"(?i)<br\s*/?>|</(?:p|div|tr|td|th|h[1-6]|li|table|thead|tbody|section|header|"
     r"article|blockquote|ul|ol)>|</title>"
 )
-_TAG_RE = re.compile(r"<[^>]+>")
+# Letter-named tags only. A bare `<[^>]+>` can close on a `>` inside a charge
+# description (e.g. `>10-50g` from `&gt;`) when an earlier `<` is unclosed.
+_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9]*[^>]*>")
+_COMMENT_RE = re.compile(r"(?is)<!--.*?-->")
+_ENTITY_GT_RE = re.compile(r"(?i)&gt;|&#62;|&#x3e;")
+_ENTITY_LT_RE = re.compile(r"(?i)&lt;|&#60;|&#x3c;")
+_GT_SENTINEL = "\u27e9"
+_LT_SENTINEL = "\u27e8"
 _SPACES_RE = re.compile(r"[ \t\f\v]+")
 _MULTI_NL_RE = re.compile(r"\n{3,}")
 
@@ -63,10 +70,12 @@ TITLE_COUNTY_RE = re.compile(
     r"(\d{4}[A-Za-z]{2}\d{6})\s+Case Details in\s+(.+?)\s+County\b",
     re.IGNORECASE,
 )
+# Stop before the next SSR heading. "Case summary" is a following section on
+# live WCCA snapshots; without it the caption swallows that heading.
 CAPTION_RE = re.compile(
     r"(State of Wisconsin\s+vs\.?\s+.+?)(?="
-    r"\s+Filing date\b|\s+Case type\b|\s+Case status\b|\s+Defendant\b|"
-    r"\s+Charges\b|\s+Count no\.|\s+Branch\b|\s+DA case\b|\n|$)",
+    r"\s+Case summary\b|\s+Filing date\b|\s+Case type\b|\s+Case status\b|"
+    r"\s+Defendant\b|\s+Charges\b|\s+Count no\.|\s+Branch\b|\s+DA case\b|\n|$)",
     re.IGNORECASE,
 )
 FILED_DATE_RE = re.compile(
@@ -95,6 +104,12 @@ STATUTE_RE = r"\d{3}\.\d{2,4}(?:\([^)]+\))*"
 SEVERITY_RE = (
     r"(?:Felony|Misdemeanor|Misd\.?|Forfeiture|Ordinance)"
     r"(?:\s+[A-Z0-9]{1,3})?"
+)
+# Split on count+statute so descriptions may contain `>` / `<` / `&gt;`
+# (a single `.+?` row regex missed count 1 on live SQL apply).
+CHARGE_START_RE = re.compile(
+    rf"(?:^|(?<=\s))(?P<count>\d+)\s+(?P<statute>{STATUTE_RE})(?=\s|>|<|$)",
+    re.IGNORECASE,
 )
 CHARGE_ROW_RE = re.compile(
     rf"(?P<count>\d+)\s+(?P<statute>{STATUTE_RE})\s+"
@@ -340,11 +355,19 @@ def extract_structured_facts(payload_obj: Any) -> tuple[date | None, str | None,
 
 
 def html_to_text(html: str | None) -> str:
-    """Strip scripts/styles/tags. Keep block boundaries as newlines."""
+    """Strip scripts/styles/tags. Keep block boundaries as newlines.
+
+    `&gt;` / `&lt;` are swapped for sentinels before tag strip so a charge
+    description like `&gt;10-50g` cannot close a tag match on `>`.
+    """
     raw = html if html else ""
     text = _SCRIPT_STYLE_RE.sub("\n", raw)
+    text = _COMMENT_RE.sub(" ", text)
+    text = _ENTITY_GT_RE.sub(_GT_SENTINEL, text)
+    text = _ENTITY_LT_RE.sub(_LT_SENTINEL, text)
     text = _BLOCK_TO_NL_RE.sub("\n", text)
     text = _TAG_RE.sub(" ", text)
+    text = text.replace(_GT_SENTINEL, ">").replace(_LT_SENTINEL, "<")
     text = unescape(text)
     text = _SPACES_RE.sub(" ", text)
     text = _MULTI_NL_RE.sub("\n\n", text)
@@ -470,12 +493,72 @@ def _parse_charges_collapsed(text: str) -> tuple[ChargeRow, ...]:
     return tuple(rows)
 
 
+def _parse_charges_by_starts(text: str) -> tuple[ChargeRow, ...]:
+    """Split the charges grid on count+statute tokens (descriptions may contain `>`)."""
+    rest = _charges_slice(text)
+    if rest is None:
+        return ()
+    collapsed = _collapse_ws(rest) or ""
+    starts = list(CHARGE_START_RE.finditer(collapsed))
+    if not starts:
+        return ()
+    rows: list[ChargeRow] = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(collapsed)
+        chunk = collapsed[start.start() : end].strip()
+        parsed = _charge_from_start_chunk(start, chunk)
+        if parsed is not None:
+            rows.append(parsed)
+    return tuple(rows)
+
+
+def _charge_from_start_chunk(start: re.Match[str], chunk: str) -> ChargeRow | None:
+    try:
+        count = int(start.group("count"))
+    except (TypeError, ValueError):
+        return None
+    statute = _collapse_ws(start.group("statute"))
+    if not statute:
+        return None
+    after = chunk[len(start.group(0)) :]
+    mod_statute: str | None = None
+    mod_text: str | None = None
+    mod = re.search(
+        rf"\s+Modifier:\s+({STATUTE_RE})\s+(.+?)\s*$",
+        after,
+        re.IGNORECASE,
+    )
+    body = after
+    if mod:
+        mod_statute = _collapse_ws(mod.group(1))
+        mod_text = _collapse_ws(mod.group(2))
+        body = after[: mod.start()]
+    sev = re.search(rf"({SEVERITY_RE})\b", body, re.IGNORECASE)
+    if not sev:
+        return None
+    description = _collapse_ws(body[: sev.start()])
+    severity = _collapse_ws(sev.group(1))
+    if not description or not severity:
+        return None
+    return ChargeRow(
+        charge_count=count,
+        statute=statute,
+        description=description,
+        severity=severity,
+        modifier_statute=mod_statute,
+        modifier_text=mod_text,
+    )
+
+
 def parse_charges_from_ssr_text(text: str) -> tuple[ChargeRow, ...]:
     """Parse charge rows from stripped SSR text. Empty if the grid is absent.
 
-    Prefer the collapsed (single-line) parser so same-line ``Modifier:`` tokens
-    attach to the preceding count. Fall back to per-line rows when needed.
+    Prefer count+statute splitting so descriptions may contain `>` / `<`.
+    Fall back to the collapsed row regex, then per-line rows.
     """
+    by_starts = _parse_charges_by_starts(text)
+    if by_starts:
+        return by_starts
     collapsed = _parse_charges_collapsed(text)
     if collapsed:
         return collapsed

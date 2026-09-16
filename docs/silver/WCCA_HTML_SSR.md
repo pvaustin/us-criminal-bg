@@ -19,10 +19,10 @@ JSON `application/json` script tags and well-known preload assignments are still
 | Silver field | SSR signal | Notes |
 |--------------|------------|--------|
 | `county_name` | Title / heading `{caseNo} Case Details in {County} County` | County token only (not `county_code`, not a lookup table). Multi-word names such as `Green Lake` are kept. |
-| `caption` | `State of Wisconsin vs. {Name}` | Full caption string. Not taken from an unrelated `<title>`. |
+| `caption` | `State of Wisconsin vs. {Name}` | Full caption string. Stops before `Case summary` / `Filing date` (not an unrelated `<title>`). |
 | `filed_date` | `Filing date MM-DD-YYYY` (optional colon) | Stored as ISO date. Example live label shape `01-09-2026` → `2026-01-09`. `/` separators accepted. |
 | `case_status` | `Case status {text}` | Terminated at the next known label (Defendant, Charges, Count no., …). |
-| `court_charge` rows | Header `Count no. Statute Description Severity Disposition` then `{n} {statute} {description} {severity}` | `charge_count` is the source count number. Optional following `Modifier: {statute} {text}` → `modifier_statute` / `modifier_text` (Python path). |
+| `court_charge` rows | Header `Count no. Statute Description Severity Disposition` then `{n} {statute} {description} {severity}` | `charge_count` is the source count number. Descriptions may contain `>` (e.g. `&gt;10-50g`). Optional following `Modifier: {statute} {text}` → `modifier_statute` / `modifier_text` (Python path). |
 | `case_type` | **Not** the SSR `Case type Criminal` label | Still the CCAP two-letter code derived from `case_number` (e.g. `CF`). |
 
 `payload_parse_status = html_ssr_v1` only when **caption**, **filed_date**, and **≥1 charge** all parse. Anything less from SSR is `html_ssr_partial`. Empty shells stay `identifiers_only`.

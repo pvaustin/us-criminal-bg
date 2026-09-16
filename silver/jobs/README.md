@@ -22,7 +22,7 @@ Synthetic HTML under `sources/wcca/tests/fixtures/` is **not** a real court reco
 Operator-only. The cloud agent that added this tree does **not** apply Silver DDL in the workspace.
 
 1. Open a SQL warehouse on `dbc-a0dcbe75-2647.cloud.databricks.com`.
-2. Run [`silver/schemas/court_case.sql`](../schemas/court_case.sql) (`CREATE SCHEMA/TABLE IF NOT EXISTS` plus `ADD COLUMN IF NOT EXISTS` for `case_status` / `county_name`).
+2. Run [`silver/schemas/court_case.sql`](../schemas/court_case.sql) (`CREATE SCHEMA/TABLE IF NOT EXISTS`). The warehouse **rejects** `ADD COLUMN IF NOT EXISTS`. The script previews missing columns via `information_schema` and adds `case_status` / `county_name` with a compound `IF NOT EXISTS (SELECT …) THEN ALTER TABLE … ADD COLUMN …` block. If that compound statement is unavailable, run only the missing plain `ALTER TABLE … ADD COLUMN <name> STRING;` statements (skip when the column already exists).
 3. Run [`silver/schemas/court_charge.sql`](../schemas/court_charge.sql).
 4. Confirm `us_criminal_bg.silver.court_case`, `us_criminal_bg.silver.court_charge`, and `us_criminal_bg.silver.transform_run` exist.
 

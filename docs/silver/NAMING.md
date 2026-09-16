@@ -88,7 +88,7 @@ Silver-owned `court_case` columns:
 | `case_number` | string null | Source case number (WCCA: `caseNo`) |
 | `case_type` | string null | **Identifier-derived** CCAP two-letter code when `case_number` matches `YYYYTTNNNNNN` (e.g. `CF` from `2026CF000028`). Not the SSR label `Case type Criminal`. Null if the pattern does not match. |
 | `filed_date` | date null | JSON `filedDate` / `filingDate` / `dateFiled`, or SSR `Filing date MM-DD-YYYY` |
-| `caption` | string null | JSON `caption` / `caseCaption`, or SSR `State of Wisconsin vs. {Name}` |
+| `caption` | string null | JSON `caption` / `caseCaption`, or SSR `State of Wisconsin vs. {Name}` (stop before `Case summary` / `Filing date`) |
 | `case_status` | string null | SSR `Case status {text}` |
 | `payload_parse_status` | string | See status vocabulary below |
 | `dq_flags` | array\<string\> | Sorted, deterministic flag names; empty array if clean |

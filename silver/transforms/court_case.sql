@@ -127,15 +127,43 @@ ssr AS (
         regexp_replace(
           regexp_replace(
             regexp_replace(
-              coalesce(n.payload, ''),
-              '(?is)<(script|style|noscript)\\b[^>]*>.*?</\\1>',
-              ' '
+              regexp_replace(
+                regexp_replace(
+                  regexp_replace(
+                    regexp_replace(
+                      regexp_replace(
+                        regexp_replace(
+                          regexp_replace(
+                            coalesce(n.payload, ''),
+                            '(?is)<(script|style|noscript)\\b[^>]*>.*?</\\1>',
+                            ' '
+                          ),
+                          '(?s)<!--.*?-->',
+                          ' '
+                        ),
+                        '(?i)&gt;|&#62;|&#x3e;',
+                        '[[GT]]'
+                      ),
+                      '(?i)&lt;|&#60;|&#x3c;',
+                      '[[LT]]'
+                    ),
+                    '(?i)<br\\s*/?>|</(?:p|div|tr|td|th|h[1-6]|li|table|thead|tbody|section|header|article)>',
+                    ' '
+                  ),
+                  '</?[A-Za-z][A-Za-z0-9]*[^>]*>',
+                  ' '
+                ),
+                '\\[\\[GT\\]\\]',
+                '>'
+              ),
+              '\\[\\[LT\\]\\]',
+              '<'
             ),
-            '(?i)<br\\s*/?>|</(?:p|div|tr|h[1-6]|li|table|thead|tbody|section|header|article)>',
+            '(?i)&nbsp;',
             ' '
           ),
-          '<[^>]+>',
-          ' '
+          '(?i)&amp;',
+          '&'
         ),
         '\\s+',
         ' '
@@ -150,7 +178,7 @@ extracted AS (
       trim(
         regexp_extract(
           s.ssr_text,
-          '(State of Wisconsin vs\\.? .+?)(?= Filing date| Case type| Case status| Defendant| Charges| Count no\\.|$)',
+          '(?i)(State of Wisconsin vs\\.? .+?)(?= Case summary| Filing date| Case type| Case status| Defendant| Charges| Count no\\.|$)',
           1
         )
       ),
@@ -193,19 +221,24 @@ extracted AS (
       trim(regexp_extract(s.ssr_text, 'Case Details in (.+?) County', 1)),
       ''
     ) AS county_name,
-    CASE
-      WHEN s.ssr_text RLIKE '(?i)Count no\\.? Statute Description Severity'
-        THEN regexp_extract_all(
-          regexp_extract(
-            s.ssr_text,
-            '(?i)Count no\\.? Statute Description Severity(?: Disposition)?(.*)$',
-            1
-          ),
-          '([0-9]+) ([0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*) (.+?) (Felony|Misdemeanor|Misd\\.?|Forfeiture|Ordinance)(?: [A-Z0-9]{1,3})?',
-          0
-        )
-      ELSE CAST(array() AS ARRAY<STRING>)
-    END AS charge_raws
+    filter(
+      split(
+        CASE
+          WHEN s.ssr_text RLIKE '(?i)Count no\\.? Statute Description Severity'
+            THEN coalesce(
+              regexp_extract(
+                s.ssr_text,
+                '(?i)Count no\\.? Statute Description Severity(?: Disposition)?(.*)$',
+                1
+              ),
+              ''
+            )
+          ELSE ''
+        END,
+        '(?=[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*)'
+      ),
+      x -> trim(x) RLIKE '^[0-9]+ [0-9]{3}\\.[0-9]{2,4}'
+    ) AS charge_raws
   FROM ssr s
 )
 SELECT
@@ -384,20 +417,26 @@ SELECT
   s.source_system,
   s.state_code,
   s.source_record_id,
-  CAST(regexp_extract(x.charge_raw, '^([0-9]+)', 1) AS INT) AS charge_count,
+  CAST(regexp_extract(trim(x.charge_raw), '^([0-9]+)', 1) AS INT) AS charge_count,
   regexp_extract(
-    x.charge_raw,
+    trim(x.charge_raw),
     '^[0-9]+ ([0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*)',
     1
   ) AS statute,
-  regexp_extract(
-    x.charge_raw,
-    '^[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))* (.+) (?:Felony|Misdemeanor|Misd\\.?|Forfeiture|Ordinance)(?: [A-Z0-9]{1,3})?$',
-    1
+  trim(
+    regexp_replace(
+      regexp_replace(
+        trim(x.charge_raw),
+        '^[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*\\s+',
+        ''
+      ),
+      '\\s+(Felony|Misdemeanor|Misd\\.?|Forfeiture|Ordinance)(?: [A-Z0-9]{1,3})?.*$',
+      ''
+    )
   ) AS description,
   regexp_extract(
-    x.charge_raw,
-    '(Felony|Misdemeanor|Misd\\.?|Forfeiture|Ordinance)(?: [A-Z0-9]{1,3})?$',
+    trim(x.charge_raw),
+    '(Felony|Misdemeanor|Misd\\.?|Forfeiture|Ordinance)(?: [A-Z0-9]{1,3})?',
     0
   ) AS severity,
   CAST(NULL AS STRING) AS modifier_statute,
@@ -413,7 +452,7 @@ FROM silver_court_case_staged s
 LATERAL VIEW explode(s.charge_raws) x AS charge_raw
 WHERE x.charge_raw IS NOT NULL
   AND trim(x.charge_raw) <> ''
-  AND regexp_extract(x.charge_raw, '^([0-9]+)', 1) RLIKE '^[0-9]+$';
+  AND regexp_extract(trim(x.charge_raw), '^([0-9]+)', 1) RLIKE '^[0-9]+$';
 
 MERGE INTO us_criminal_bg.silver.court_charge AS t
 USING silver_court_charge_staged AS s

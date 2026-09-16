@@ -5,6 +5,7 @@ Fixtures are synthetic and are never claimed as real court records.
 
 from __future__ import annotations
 
+import re
 import sys
 import unittest
 from datetime import date
@@ -15,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from sources.wcca.parse import (  # noqa: E402
+    CAPTION_RE,
     html_to_text,
     parse_source_record_id,
     parse_source_url,
@@ -400,6 +402,83 @@ class ParseHtmlSsrTests(unittest.TestCase):
         self.assertIsNone(result.county_name)
         self.assertEqual(result.payload_parse_status, "identifiers_only")
         self.assertIn("unparsed_html_spa", result.dq_flags)
+
+    def test_caption_stops_before_case_summary_and_count_one_keeps_gt(self) -> None:
+        html = (FIXTURES / "synthetic_html_ssr_gt_and_case_summary.html").read_text(
+            encoding="utf-8"
+        )
+        result = parse_wcca_bronze_row(
+            source_system="wcca",
+            source_record_id="01:2099CF000008",
+            source_url=(
+                "https://example.test/caseDetail.html?caseNo=2099CF000008&countyNo=1"
+            ),
+            payload_format="html_snapshot",
+            payload=html,
+        )
+        self.assertEqual(result.caption, "State of Wisconsin vs. FIXTURE, GT CASE")
+        self.assertNotIn("Case summary", result.caption)
+        self.assertEqual(result.filed_date, date(2099, 5, 5))
+        self.assertEqual(result.payload_parse_status, "html_ssr_v1")
+        self.assertEqual([c.charge_count for c in result.charges], list(range(1, 9)))
+        self.assertEqual(result.charges[0].statute, "999.41(3g)(e)")
+        self.assertEqual(
+            result.charges[0].description, "Synthetic THC possession >10-50g"
+        )
+        self.assertIn(">", result.charges[0].description)
+        self.assertEqual(result.charges[7].charge_count, 8)
+        self.assertEqual(result.charges[7].statute, "999.08")
+        collapsed = (
+            "State of Wisconsin vs. FIXTURE, GT CASE Case summary "
+            "Filing date 05-05-2099"
+        )
+        cap = CAPTION_RE.search(collapsed)
+        self.assertIsNotNone(cap)
+        self.assertEqual(cap.group(1), "State of Wisconsin vs. FIXTURE, GT CASE")
+        self.assertNotIn("Case summary", cap.group(1))
+
+
+class SqlSsrRegexTests(unittest.TestCase):
+    """Python stand-ins for the warehouse SQL regexes (Java-compatible subset)."""
+
+    SQL_CAPTION = re.compile(
+        r"(?i)(State of Wisconsin vs\.? .+?)(?= Case summary| Filing date|"
+        r" Case type| Case status| Defendant| Charges| Count no\.|$)"
+    )
+    SQL_CHARGE_SPLIT = re.compile(
+        r"(?=[0-9]+ [0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*)"
+    )
+
+    def test_sql_caption_regex_stops_at_case_summary(self) -> None:
+        collapsed = (
+            "State of Wisconsin vs. FIXTURE, GT CASE Case summary "
+            "Filing date 05-05-2099 Case type Criminal"
+        )
+        match = self.SQL_CAPTION.search(collapsed)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), "State of Wisconsin vs. FIXTURE, GT CASE")
+        self.assertNotIn("Case summary", match.group(1))
+
+    def test_sql_charge_split_keeps_count_one_with_gt(self) -> None:
+        blob = (
+            "1 999.41(3g)(e) Synthetic THC possession >10-50g Felony "
+            "2 999.02 Synthetic offense two Misdemeanor "
+            "3 999.03 Synthetic offense three Felony "
+            "4 999.04 Synthetic offense four Misdemeanor A "
+            "5 999.05(1) Synthetic offense five Felony "
+            "6 999.06 Synthetic offense six Forfeiture "
+            "7 999.07 Synthetic offense seven Felony "
+            "8 999.08 Synthetic offense eight Misdemeanor"
+        )
+        parts = [
+            part.strip()
+            for part in self.SQL_CHARGE_SPLIT.split(blob)
+            if re.match(r"^[0-9]+ [0-9]{3}\.[0-9]{2,4}", part.strip() or "")
+        ]
+        self.assertEqual(len(parts), 8)
+        self.assertTrue(parts[0].startswith("1 "))
+        self.assertIn(">10-50g", parts[0])
+        self.assertTrue(parts[7].startswith("8 "))
 
 
 if __name__ == "__main__":
