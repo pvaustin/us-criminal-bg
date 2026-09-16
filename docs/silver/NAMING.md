@@ -103,7 +103,7 @@ Silver-owned `court_charge` columns:
 | `charge_count` | int | Source count number (MERGE key part) |
 | `statute` | string null | Statute token from the charges grid |
 | `description` | string null | Offense description |
-| `severity` | string null | e.g. `Felony`, `Misdemeanor A` |
+| `severity` | string null | Exact SSR token, e.g. `Felony`, `Misd. A`, `Felony D` (not expanded) |
 | `modifier_statute` | string null | From `Modifier: {statute} {text}` (Python path; SQL leaves null) |
 | `modifier_text` | string null | Remainder of the Modifier line |
 | `silver_schema_version` | string | `silver.court_charge.v1` |
@@ -206,5 +206,5 @@ Bump `silver_schema_version` when Silver columns or parse-status/flag vocabulari
 
 ### Changelog
 
-- `2026-09-16` — `silver.court_case.v2` + `silver.court_charge.v1`: HTML SSR parser for caption / filed_date / case_status / county_name / charges; statuses `html_ssr_v1` and `html_ssr_partial`.
+- `2026-09-16` — `silver.court_case.v2` + `silver.court_charge.v1`: HTML SSR parser for caption / filed_date / case_status / county_name / charges; statuses `html_ssr_v1` and `html_ssr_partial`. Caption stops before `Case summary`. Charge rows split on count+statute so descriptions may contain `>`.
 - `2026-09-15` — Initial national-first Silver contract (MVP: `court_case` + `transform_run`, WCCA identifiers).

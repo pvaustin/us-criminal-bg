@@ -2,6 +2,10 @@
 -- Contract: docs/silver/NAMING.md
 -- Parses identifiers from source_record_id / URL, then HTML SSR labels from payload
 -- text after scripts/styles/tags are stripped (see docs/silver/WCCA_HTML_SSR.md).
+-- Caption stops before "Case summary" / "Filing date". Charges are split on
+-- count+statute tokens (including trailing digits after parens, e.g. (hm)3)
+-- so descriptions may contain `>`. Severity is the last exact token
+-- (Misd. A / Felony D), not an expansion of Misd. → Misdemeanor.
 -- Charge modifier_* columns are left null in this SQL path; the Python job fills them.
 -- Does not mutate Bronze.
 --
@@ -235,7 +239,7 @@ extracted AS (
             )
           ELSE ''
         END,
-        '(?=[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*)'
+        '(?=[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*[0-9]*)'
       ),
       x -> trim(x) RLIKE '^[0-9]+ [0-9]{3}\\.[0-9]{2,4}'
     ) AS charge_raws
@@ -420,24 +424,24 @@ SELECT
   CAST(regexp_extract(trim(x.charge_raw), '^([0-9]+)', 1) AS INT) AS charge_count,
   regexp_extract(
     trim(x.charge_raw),
-    '^[0-9]+ ([0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*)',
+    '^[0-9]+ ([0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*[0-9]*)',
     1
   ) AS statute,
   trim(
     regexp_replace(
       regexp_replace(
         trim(x.charge_raw),
-        '^[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*\\s+',
+        '^[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*[0-9]*\\s+',
         ''
       ),
-      '\\s+(Felony|Misdemeanor|Misd\\.?|Forfeiture|Ordinance)(?: [A-Z0-9]{1,3})?.*$',
+      '\\s+(Misd\\. [A-IU]|Felony [A-IU]|Misdemeanor [A-IU]|Misd\\.|Felony|Misdemeanor|Forfeiture|Ordinance)\\b.*$',
       ''
     )
   ) AS description,
   regexp_extract(
     trim(x.charge_raw),
-    '(Felony|Misdemeanor|Misd\\.?|Forfeiture|Ordinance)(?: [A-Z0-9]{1,3})?',
-    0
+    '.*(Misd\\. [A-IU]|Felony [A-IU]|Misdemeanor [A-IU]|Misd\\.|Felony|Misdemeanor|Forfeiture|Ordinance)\\b',
+    1
   ) AS severity,
   CAST(NULL AS STRING) AS modifier_statute,
   CAST(NULL AS STRING) AS modifier_text,

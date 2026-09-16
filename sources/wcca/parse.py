@@ -99,12 +99,15 @@ CHARGE_SECTION_STOP_RE = re.compile(
     re.IGNORECASE,
 )
 
-# WI statute tokens as they appear in the charges grid, e.g. 946.41(1), 961.41(3g)(e)
-STATUTE_RE = r"\d{3}\.\d{2,4}(?:\([^)]+\))*"
+# WI statute tokens: 946.41(1), 961.41(3g)(e), 961.41(1m)(hm)3 (trailing digit)
+STATUTE_RE = r"\d{3}\.\d{2,4}(?:\([^)]+\))*\d*"
+# Exact SSR severity tokens. Do not expand Misd. → Misdemeanor or eat "M" from Misd.
+# Class letter is a single A–I / U token with a word boundary.
 SEVERITY_RE = (
-    r"(?:Felony|Misdemeanor|Misd\.?|Forfeiture|Ordinance)"
-    r"(?:\s+[A-Z0-9]{1,3})?"
+    r"(?:Misd\.\s+[A-IU]\b|Felony\s+[A-IU]\b|Misdemeanor\s+[A-IU]\b|"
+    r"Misd\.|Felony|Misdemeanor|Forfeiture|Ordinance)"
 )
+SEVERITY_TOKEN_RE = re.compile(SEVERITY_RE, re.IGNORECASE)
 # Split on count+statute so descriptions may contain `>` / `<` / `&gt;`
 # (a single `.+?` row regex missed count 1 on live SQL apply).
 CHARGE_START_RE = re.compile(
@@ -512,6 +515,19 @@ def _parse_charges_by_starts(text: str) -> tuple[ChargeRow, ...]:
     return tuple(rows)
 
 
+def _last_severity_token(body: str) -> re.Match[str] | None:
+    """Last whitespace-delimited severity token (not `Jumping-Felony` in the name)."""
+    matches = list(SEVERITY_TOKEN_RE.finditer(body))
+    if not matches:
+        return None
+    spaced = [
+        match
+        for match in matches
+        if match.start() == 0 or body[match.start() - 1].isspace()
+    ]
+    return spaced[-1] if spaced else matches[-1]
+
+
 def _charge_from_start_chunk(start: re.Match[str], chunk: str) -> ChargeRow | None:
     try:
         count = int(start.group("count"))
@@ -533,11 +549,11 @@ def _charge_from_start_chunk(start: re.Match[str], chunk: str) -> ChargeRow | No
         mod_statute = _collapse_ws(mod.group(1))
         mod_text = _collapse_ws(mod.group(2))
         body = after[: mod.start()]
-    sev = re.search(rf"({SEVERITY_RE})\b", body, re.IGNORECASE)
+    sev = _last_severity_token(body)
     if not sev:
         return None
     description = _collapse_ws(body[: sev.start()])
-    severity = _collapse_ws(sev.group(1))
+    severity = _collapse_ws(sev.group(0))
     if not description or not severity:
         return None
     return ChargeRow(

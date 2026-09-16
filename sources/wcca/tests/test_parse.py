@@ -421,13 +421,21 @@ class ParseHtmlSsrTests(unittest.TestCase):
         self.assertEqual(result.filed_date, date(2099, 5, 5))
         self.assertEqual(result.payload_parse_status, "html_ssr_v1")
         self.assertEqual([c.charge_count for c in result.charges], list(range(1, 9)))
-        self.assertEqual(result.charges[0].statute, "999.41(3g)(e)")
+        self.assertEqual(result.charges[0].statute, "999.41(1m)(hm)3")
         self.assertEqual(
-            result.charges[0].description, "Synthetic THC possession >10-50g"
+            result.charges[0].description, "Synthetic intent drugs(>10-50g)"
         )
+        self.assertNotIn("999.41", result.charges[0].description)
+        self.assertNotIn("1 999", result.charges[0].description or "")
         self.assertIn(">", result.charges[0].description)
+        self.assertEqual(result.charges[0].severity, "Felony")
+        self.assertEqual(result.charges[4].severity, "Misd. A")
+        self.assertEqual(result.charges[5].severity, "Misd. A")
+        self.assertEqual(result.charges[6].severity, "Misd. U")
+        self.assertEqual(result.charges[7].severity, "Felony D")
+        self.assertNotEqual(result.charges[4].severity, "Misdemeanor M")
         self.assertEqual(result.charges[7].charge_count, 8)
-        self.assertEqual(result.charges[7].statute, "999.08")
+        self.assertEqual(result.charges[7].statute, "999.49(1)(b)")
         collapsed = (
             "State of Wisconsin vs. FIXTURE, GT CASE Case summary "
             "Filing date 05-05-2099"
@@ -446,7 +454,22 @@ class SqlSsrRegexTests(unittest.TestCase):
         r" Case type| Case status| Defendant| Charges| Count no\.|$)"
     )
     SQL_CHARGE_SPLIT = re.compile(
-        r"(?=[0-9]+ [0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*)"
+        r"(?=[0-9]+ [0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*[0-9]*)"
+    )
+    SQL_STATUTE = re.compile(
+        r"^[0-9]+ ([0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*[0-9]*)"
+    )
+    SQL_STATUTE_PREFIX = re.compile(
+        r"^[0-9]+ [0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*[0-9]*\s+"
+    )
+    SQL_SEVERITY_LAST = re.compile(
+        r".*(Misd\. [A-IU]|Felony [A-IU]|Misdemeanor [A-IU]|Misd\.|"
+        r"Felony|Misdemeanor|Forfeiture|Ordinance)\b",
+        re.DOTALL,
+    )
+    SQL_SEVERITY_STRIP = re.compile(
+        r"\s+(Misd\. [A-IU]|Felony [A-IU]|Misdemeanor [A-IU]|Misd\.|"
+        r"Felony|Misdemeanor|Forfeiture|Ordinance)\b.*$"
     )
 
     def test_sql_caption_regex_stops_at_case_summary(self) -> None:
@@ -461,14 +484,14 @@ class SqlSsrRegexTests(unittest.TestCase):
 
     def test_sql_charge_split_keeps_count_one_with_gt(self) -> None:
         blob = (
-            "1 999.41(3g)(e) Synthetic THC possession >10-50g Felony "
+            "1 999.41(1m)(hm)3 Synthetic intent drugs(>10-50g) Felony "
             "2 999.02 Synthetic offense two Misdemeanor "
             "3 999.03 Synthetic offense three Felony "
-            "4 999.04 Synthetic offense four Misdemeanor A "
-            "5 999.05(1) Synthetic offense five Felony "
-            "6 999.06 Synthetic offense six Forfeiture "
-            "7 999.07 Synthetic offense seven Felony "
-            "8 999.08 Synthetic offense eight Misdemeanor"
+            "4 999.04 Synthetic offense four Felony D "
+            "5 999.49(1)(a) Synthetic bail jumping-Misdemeanor Misd. A "
+            "6 999.49(1)(b) Synthetic bail jumping-Felony Misd. A "
+            "7 999.49(1)(b) Synthetic bail jumping-Felony Misd. U "
+            "8 999.49(1)(b) Synthetic bail jumping-Felony Felony D"
         )
         parts = [
             part.strip()
@@ -477,8 +500,21 @@ class SqlSsrRegexTests(unittest.TestCase):
         ]
         self.assertEqual(len(parts), 8)
         self.assertTrue(parts[0].startswith("1 "))
-        self.assertIn(">10-50g", parts[0])
-        self.assertTrue(parts[7].startswith("8 "))
+        statute = self.SQL_STATUTE.match(parts[0])
+        self.assertIsNotNone(statute)
+        self.assertEqual(statute.group(1), "999.41(1m)(hm)3")
+        desc = self.SQL_SEVERITY_STRIP.sub(
+            "", self.SQL_STATUTE_PREFIX.sub("", parts[0])
+        ).strip()
+        self.assertEqual(desc, "Synthetic intent drugs(>10-50g)")
+        self.assertNotIn("999.41", desc)
+        self.assertEqual(self.SQL_SEVERITY_LAST.search(parts[4]).group(1), "Misd. A")
+        self.assertEqual(self.SQL_SEVERITY_LAST.search(parts[5]).group(1), "Misd. A")
+        self.assertEqual(self.SQL_SEVERITY_LAST.search(parts[6]).group(1), "Misd. U")
+        self.assertEqual(self.SQL_SEVERITY_LAST.search(parts[7]).group(1), "Felony D")
+        self.assertNotEqual(
+            self.SQL_SEVERITY_LAST.search(parts[4]).group(1), "Misdemeanor M"
+        )
 
 
 if __name__ == "__main__":

@@ -1,8 +1,12 @@
 <!--
   SYNTHETIC FIXTURE — NOT A REAL COURT RECORD.
-  Captures two live SQL-apply regressions without using real PII:
+  Captures live SQL-apply regressions without using real PII:
   1) Caption is followed by a "Case summary" heading (must not be captured).
-  2) Charge count 1 description contains `&gt;` / `>` (must not drop that row).
+  2) Charge count 1 statute has a trailing digit after nested parens (`(hm)3`)
+     and the description contains `&gt;` / `>` (must not truncate statute or
+     pollute description with count+statute).
+  3) Bail-jumping-style rows use exact SSR severity `Misd. A` / `Misd. U` /
+     `Felony D` even when the description contains `-Felony` / `-Misdemeanor`.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -26,8 +30,8 @@
       </tr>
       <tr>
         <td>1</td>
-        <td>999.41(3g)(e)</td>
-        <td>Synthetic THC possession &gt;10-50g</td>
+        <td>999.41(1m)(hm)3</td>
+        <td>Synthetic intent drugs(&gt;10-50g)</td>
         <td>Felony</td>
         <td></td>
       </tr>
@@ -49,35 +53,35 @@
         <td>4</td>
         <td>999.04</td>
         <td>Synthetic offense four</td>
-        <td>Misdemeanor A</td>
+        <td>Felony D</td>
         <td></td>
       </tr>
       <tr>
         <td>5</td>
-        <td>999.05(1)</td>
-        <td>Synthetic offense five</td>
-        <td>Felony</td>
+        <td>999.49(1)(a)</td>
+        <td>Synthetic bail jumping-Misdemeanor</td>
+        <td>Misd. A</td>
         <td></td>
       </tr>
       <tr>
         <td>6</td>
-        <td>999.06</td>
-        <td>Synthetic offense six</td>
-        <td>Forfeiture</td>
+        <td>999.49(1)(b)</td>
+        <td>Synthetic bail jumping-Felony</td>
+        <td>Misd. A</td>
         <td></td>
       </tr>
       <tr>
         <td>7</td>
-        <td>999.07</td>
-        <td>Synthetic offense seven</td>
-        <td>Felony</td>
+        <td>999.49(1)(b)</td>
+        <td>Synthetic bail jumping-Felony</td>
+        <td>Misd. U</td>
         <td></td>
       </tr>
       <tr>
         <td>8</td>
-        <td>999.08</td>
-        <td>Synthetic offense eight</td>
-        <td>Misdemeanor</td>
+        <td>999.49(1)(b)</td>
+        <td>Synthetic bail jumping-Felony</td>
+        <td>Felony D</td>
         <td></td>
       </tr>
     </table>
