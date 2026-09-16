@@ -15,6 +15,7 @@ from silver.transforms.map_court_case import (  # noqa: E402
     business_fields,
     map_bronze_to_court_case,
     map_bronze_to_court_charges,
+    map_bronze_to_court_parties,
 )
 
 FIXTURES = ROOT / "sources" / "wcca" / "tests" / "fixtures"
@@ -95,6 +96,47 @@ class MapCourtCaseTests(unittest.TestCase):
         a = map_bronze_to_court_charges(bronze, transform_run_id="run-a")
         b = map_bronze_to_court_charges(bronze, transform_run_id="run-b")
         self.assertEqual(business_fields(a[0]), business_fields(b[0]))
+
+    def test_ssr_parties_fixture_maps_plaintiff_defendant_aka(self) -> None:
+        bronze = dict(LIVE_BRONZE)
+        bronze["payload"] = (FIXTURES / "synthetic_html_ssr_parties.html").read_text(
+            encoding="utf-8"
+        )
+        bronze["source_record_id"] = "01:2099CF000010"
+        parties = map_bronze_to_court_parties(bronze, transform_run_id="run-1")
+        self.assertNotIn("payload", parties[0])
+        self.assertNotIn("race", parties[0])
+        roles = [p["party_role"] for p in parties]
+        self.assertEqual(roles.count("plaintiff"), 1)
+        self.assertEqual(roles.count("defendant"), 1)
+        self.assertEqual(roles.count("aka"), 2)
+        defendant = next(p for p in parties if p["party_role"] == "defendant")
+        self.assertEqual(defendant["raw_name"], "FIXTURE, JANE Q")
+        self.assertEqual(defendant["dob"], date(2099, 1, 15))
+        self.assertEqual(defendant["sex"], "Female")
+        self.assertEqual(defendant["silver_schema_version"], "silver.court_party.v1")
+        self.assertEqual(defendant["ingest_run_id"], bronze["ingest_run_id"])
+        self.assertEqual(defendant["payload_sha256"], "abc123")
+        self.assertEqual(defendant["source_record_id"], "01:2099CF000010")
+        a = map_bronze_to_court_parties(bronze, transform_run_id="run-a")
+        b = map_bronze_to_court_parties(bronze, transform_run_id="run-b")
+        self.assertEqual(
+            [business_fields(row) for row in a],
+            [business_fields(row) for row in b],
+        )
+        fewer = dict(bronze)
+        fewer["payload"] = (FIXTURES / "synthetic_html_ssr_v1.html").read_text(
+            encoding="utf-8"
+        )
+        dropped = map_bronze_to_court_parties(fewer, transform_run_id="run-2")
+        self.assertFalse(any(p["party_role"] == "aka" for p in dropped))
+        self.assertEqual(len(dropped), 2)
+
+    def test_shell_maps_zero_parties(self) -> None:
+        self.assertEqual(
+            map_bronze_to_court_parties(LIVE_BRONZE, transform_run_id="run-1"),
+            [],
+        )
 
 
 if __name__ == "__main__":

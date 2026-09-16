@@ -20,7 +20,7 @@ See `docs/bronze/ACCESS.md` for CAPTCHA / paid REST rules. This package must nev
 - URL: `caseDetail.html?caseNo=...&countyNo=...` query params are preferred if they disagree with the id
 - Bronze composed fallback from `docs/bronze/NAMING.md`: `WI|wcca|{county}|{case_number}`
 
-HTML snapshots of WCCA case detail are treated as **server-rendered text** (title, caption, filing date, status, charges grid) after scripts/styles/tags are stripped. Empty SPA shells stay identifier-only. The parser does **not** invent fields that are not in those patterns. See `docs/silver/WCCA_HTML_SSR.md`.
+HTML snapshots of WCCA case detail are treated as **server-rendered text** (title, caption, filing date, status, charges grid, defendant / aka labels) after scripts/styles/tags are stripped. Empty SPA shells stay identifier-only. The parser does **not** invent fields that are not in those patterns. See `docs/silver/WCCA_HTML_SSR.md`.
 
 ```bash
 python3 -m unittest discover -s sources/wcca/tests -v

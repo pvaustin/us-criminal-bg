@@ -10,7 +10,8 @@ Identifier contract (see docs/silver/NAMING.md):
 HTML snapshots: live WCCA detail pages store server-rendered plain text (not an
 empty SPA shell and not a __NEXT_DATA__ case blob). After scripts/styles/tags
 are stripped, deterministic regex extracts caption, filing date, case status,
-county name, and charges. See docs/silver/WCCA_HTML_SSR.md.
+county name, charges, and parties (plaintiff / defendant / aka). Race is not a
+Silver party column. See docs/silver/WCCA_HTML_SSR.md.
 """
 
 from __future__ import annotations
@@ -27,6 +28,10 @@ SOURCE_SYSTEM = "wcca"
 STATE_CODE = "WI"
 SILVER_SCHEMA_VERSION = "silver.court_case.v2"
 SILVER_CHARGE_SCHEMA_VERSION = "silver.court_charge.v1"
+SILVER_PARTY_SCHEMA_VERSION = "silver.court_party.v1"
+
+PARTY_ROLES = ("defendant", "plaintiff", "aka", "other")
+ORG_PLAINTIFF_RE = re.compile(r"(?i)^state of wisconsin$")
 
 # CCAP case numbers: year + 2-letter type + 6-digit sequence, e.g. 2026CF000028
 CASE_NUMBER_RE = re.compile(r"^(\d{4})([A-Z]{2})(\d{6})$", re.IGNORECASE)
@@ -134,6 +139,56 @@ LINE_MODIFIER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Party labels from the WCCA defendant block / caption. Never invent DOB/address.
+DEFENDANT_NAME_RE = re.compile(
+    r"Defendant\s+name\s*:?\s*(.+?)(?="
+    r"\s+Date of birth\b|\s+Sex\b|\s+Race\b|\s+Address\b|"
+    r"\s+Also known as\b|\s+Defendant name\b|\s+Charges\b|"
+    r"\s+Count no\.|\s+Filing date\b|\s+Case type\b|\s+Case status\b|"
+    r"\s+Branch\b|\s+DA case\b|\s+Prosecut|\s+Defense\b|$)",
+    re.IGNORECASE,
+)
+DOB_LABEL_RE = re.compile(
+    r"Date of birth\s*:?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{4})",
+    re.IGNORECASE,
+)
+SEX_LABEL_RE = re.compile(
+    r"(?:^|\s)Sex\s*:?\s*(Male|Female|Unknown)(?="
+    r"\s+Race\b|\s+Address\b|\s+Also known as\b|\s+Date of birth\b|"
+    r"\s+Charges\b|\s+Count no\.|\s+Defendant\b|$|\s)",
+    re.IGNORECASE,
+)
+ADDRESS_LABEL_RE = re.compile(
+    r"Address\s*:?\s*(.+?)(?="
+    r"\s+Also known as\b|\s+Charges\b|\s+Count no\.|\s+Court records?\b|"
+    r"\s+Warrants?\b|\s+Judgments?\b|\s+This is not the official\b|"
+    r"\s+Phone\b|\s+Attorney\b|\s+Prosecut|\s+Defense\b|\s+Responsible\b|"
+    r"\s+Race\b|\s+Sex\b|\s+Date of birth\b|$)",
+    re.IGNORECASE,
+)
+AKA_SECTION_RE = re.compile(
+    r"Also known as\s*:?\s*(.+?)(?="
+    r"\s+Charges\b|\s+Count no\.|\s+Court records?\b|\s+Warrants?\b|"
+    r"\s+Judgments?\b|\s+This is not the official\b|\s+Prosecut|"
+    r"\s+Defense\b|\s+Responsible\b|$)",
+    re.IGNORECASE,
+)
+AKA_NAME_ITEM_RE = re.compile(
+    r"(?:^|\s)Name\s+(.+?)(?=\s+Name\b|$)",
+    re.IGNORECASE,
+)
+CAPTION_SIDES_RE = re.compile(
+    r"^(State of Wisconsin)\s+vs\.?\s+(.+)$",
+    re.IGNORECASE,
+)
+PERSON_LAST_FIRST_RE = re.compile(
+    r"^([A-Za-z][A-Za-z.'\- ]*?),\s*([A-Za-z][A-Za-z.'-]*)(?:\s+([A-Za-z][A-Za-z.'\- ]*))?$"
+)
+SWALLOWED_CHARGE_RE = re.compile(
+    rf"\b(?:Felony|Misdemeanor|Misd\.?|Forfeiture|Count no)\b|{STATUTE_RE}",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class IdentifierParts:
@@ -163,6 +218,36 @@ class ChargeRow:
 
 
 @dataclass(frozen=True)
+class PartyRow:
+    party_role: str
+    party_ordinal: int
+    raw_name: str
+    name_last: str | None = None
+    name_first: str | None = None
+    name_middle: str | None = None
+    dob: date | None = None
+    sex: str | None = None
+    address_raw: str | None = None
+    payload_parse_status: str = "html_ssr_v1"
+    dq_flags: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "party_role": self.party_role,
+            "party_ordinal": self.party_ordinal,
+            "raw_name": self.raw_name,
+            "name_last": self.name_last,
+            "name_first": self.name_first,
+            "name_middle": self.name_middle,
+            "dob": self.dob,
+            "sex": self.sex,
+            "address_raw": self.address_raw,
+            "payload_parse_status": self.payload_parse_status,
+            "dq_flags": list(self.dq_flags),
+        }
+
+
+@dataclass(frozen=True)
 class WccaParseResult:
     county_code: str | None
     case_number: str | None
@@ -176,6 +261,7 @@ class WccaParseResult:
     dq_flags: tuple[str, ...]
     silver_schema_version: str = SILVER_SCHEMA_VERSION
     notes: tuple[str, ...] = field(default_factory=tuple)
+    parties: tuple[PartyRow, ...] = ()
 
 
 def _blank_to_none(value: str | None) -> str | None:
@@ -565,6 +651,238 @@ def parse_charges_from_ssr_text(text: str) -> tuple[ChargeRow, ...]:
     return _parse_charges_lines(text)
 
 
+def is_org_party_name(raw_name: str | None) -> bool:
+    """WI criminal caption plaintiff is typically the State, not a person."""
+    collapsed = _collapse_ws(raw_name)
+    if collapsed is None:
+        return False
+    return ORG_PLAINTIFF_RE.match(collapsed) is not None
+
+
+def split_person_name(
+    raw_name: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Split `Last, First[ Middle…]` when that form is reliable.
+
+    Returns (None, None, None) when there is no comma, the tokens do not look
+    like a person name, or the string is an organizational plaintiff. Never
+    guesses `First Last` order.
+    """
+    collapsed = _collapse_ws(raw_name)
+    if collapsed is None or is_org_party_name(collapsed):
+        return None, None, None
+    match = PERSON_LAST_FIRST_RE.match(collapsed)
+    if not match:
+        return None, None, None
+    last = _collapse_ws(match.group(1))
+    first = _collapse_ws(match.group(2))
+    middle = _collapse_ws(match.group(3))
+    if last is None or first is None:
+        return None, None, None
+    if len(last.split()) > 4:
+        return None, None, None
+    return last, first, middle
+
+
+def caption_plaintiff_and_defendant(
+    caption: str | None,
+) -> tuple[str | None, str | None]:
+    """Return (plaintiff, defendant) from `State of Wisconsin vs. {Name}`."""
+    collapsed = _collapse_ws(caption)
+    if collapsed is None:
+        return None, None
+    match = CAPTION_SIDES_RE.match(collapsed)
+    if not match:
+        return None, None
+    return _collapse_ws(match.group(1)), _collapse_ws(match.group(2))
+
+
+def _looks_like_swallowed_charges(value: str | None) -> bool:
+    collapsed = _collapse_ws(value)
+    if collapsed is None:
+        return False
+    return SWALLOWED_CHARGE_RE.search(collapsed) is not None
+
+
+def _aka_names(section: str | None) -> list[str]:
+    collapsed = _collapse_ws(section)
+    if collapsed is None:
+        return []
+    names: list[str] = []
+    for match in AKA_NAME_ITEM_RE.finditer(" " + collapsed):
+        name = _collapse_ws(match.group(1))
+        if name and name.lower() != "name" and not _looks_like_swallowed_charges(name):
+            names.append(name)
+    if names:
+        return names
+    leftover = _collapse_ws(re.sub(r"(?i)^name\s+", "", collapsed))
+    if (
+        leftover
+        and leftover.lower() not in {"name", "also known as"}
+        and not _looks_like_swallowed_charges(leftover)
+    ):
+        return [leftover]
+    return []
+
+
+def _build_party(
+    *,
+    role: str,
+    ordinal: int,
+    raw_name: str,
+    dob: date | None = None,
+    sex: str | None = None,
+    address_raw: str | None = None,
+    status: str = "html_ssr_v1",
+    extra_flags: tuple[str, ...] = (),
+) -> PartyRow:
+    last, first, middle = split_person_name(raw_name)
+    flags = [flag for flag in extra_flags if flag]
+    if last is None and first is None and not is_org_party_name(raw_name):
+        flags.append("ambiguous_name_parts")
+    if role == "defendant" and dob is None:
+        flags.append("missing_dob")
+    if role not in PARTY_ROLES:
+        flags.append("invalid_party_role")
+    return PartyRow(
+        party_role=role,
+        party_ordinal=ordinal,
+        raw_name=raw_name,
+        name_last=last,
+        name_first=first,
+        name_middle=middle,
+        dob=dob,
+        sex=sex,
+        address_raw=address_raw,
+        payload_parse_status=status,
+        dq_flags=tuple(sorted(set(flags))),
+    )
+
+
+def parse_parties_from_ssr_text(
+    text: str | None,
+    *,
+    caption: str | None = None,
+) -> tuple[PartyRow, ...]:
+    """Extract plaintiff / defendant / aka rows. Empty if names are absent.
+
+    DOB, sex, and address are filled only from explicit labels. Race is not a
+    party column (agency-provided subjective; matching must not require it).
+    """
+    raw_text = text or ""
+    collapsed = _collapse_ws(raw_text) or ""
+    caption_text = caption or _first_group(CAPTION_RE, raw_text) or _first_group(
+        CAPTION_RE, collapsed
+    )
+    plaintiff, caption_defendant = caption_plaintiff_and_defendant(caption_text)
+
+    labeled_names: list[str] = []
+    for blob in (raw_text, collapsed):
+        if not blob:
+            continue
+        for match in DEFENDANT_NAME_RE.finditer(blob):
+            name = _collapse_ws(match.group(1))
+            if (
+                name
+                and not _looks_like_swallowed_charges(name)
+                and name not in labeled_names
+            ):
+                labeled_names.append(name)
+        if labeled_names:
+            break
+
+    dob_raw = _first_group(DOB_LABEL_RE, raw_text) or _first_group(
+        DOB_LABEL_RE, collapsed
+    )
+    dob = _parse_filed_date(dob_raw)
+    dob_unparsed = bool(dob_raw) and dob is None
+
+    sex = None
+    for blob in (raw_text, collapsed):
+        sex_match = SEX_LABEL_RE.search(blob)
+        if sex_match:
+            sex = _collapse_ws(sex_match.group(1))
+            if sex:
+                sex = sex[:1].upper() + sex[1:].lower()
+            break
+
+    address_raw = None
+    for blob in (raw_text, collapsed):
+        addr = _first_group(ADDRESS_LABEL_RE, blob)
+        if addr and not _looks_like_swallowed_charges(addr):
+            address_raw = addr
+            break
+
+    aka_section = None
+    for blob in (raw_text, collapsed):
+        aka_match = AKA_SECTION_RE.search(blob)
+        if aka_match:
+            aka_section = aka_match.group(1)
+            break
+    aka_list = _aka_names(aka_section)
+
+    rows: list[PartyRow] = []
+    if plaintiff:
+        rows.append(
+            _build_party(
+                role="plaintiff",
+                ordinal=1,
+                raw_name=plaintiff,
+            )
+        )
+
+    defendant_name = labeled_names[0] if labeled_names else caption_defendant
+    extra: list[str] = []
+    status = "html_ssr_v1"
+    if defendant_name and not labeled_names:
+        extra.append("defendant_from_caption")
+        status = "html_ssr_partial"
+    if dob_unparsed:
+        extra.append("dob_unparsed")
+    if defendant_name:
+        rows.append(
+            _build_party(
+                role="defendant",
+                ordinal=1,
+                raw_name=defendant_name,
+                dob=dob,
+                sex=sex,
+                address_raw=address_raw,
+                status=status,
+                extra_flags=tuple(extra),
+            )
+        )
+        for index, extra_name in enumerate(labeled_names[1:], start=2):
+            rows.append(
+                _build_party(
+                    role="defendant",
+                    ordinal=index,
+                    raw_name=extra_name,
+                    status="html_ssr_v1",
+                )
+            )
+
+    skip = {
+        (defendant_name or "").casefold(),
+        (plaintiff or "").casefold(),
+    }
+    aka_ordinal = 1
+    for aka in aka_list:
+        if aka.casefold() in skip:
+            continue
+        rows.append(
+            _build_party(
+                role="aka",
+                ordinal=aka_ordinal,
+                raw_name=aka,
+            )
+        )
+        skip.add(aka.casefold())
+        aka_ordinal += 1
+
+    return tuple(rows)
+
+
 def extract_ssr_facts(html: str | None) -> dict[str, Any]:
     """Deterministic SSR fields from visible HTML text. Never invents."""
     raw = html if html else ""
@@ -580,12 +898,14 @@ def extract_ssr_facts(html: str | None) -> dict[str, Any]:
         CASE_STATUS_RE, collapsed
     )
     charges = parse_charges_from_ssr_text(text)
+    parties = parse_parties_from_ssr_text(text, caption=caption)
     found = bool(
         county_name
         or caption
         or filed_date
         or case_status
         or charges
+        or parties
         or CHARGE_HEADER_RE.search(text)
         or TITLE_COUNTY_RE.search(text)
         or TITLE_COUNTY_RE.search(collapsed)
@@ -596,6 +916,7 @@ def extract_ssr_facts(html: str | None) -> dict[str, Any]:
         "case_status": case_status,
         "county_name": county_name,
         "charges": charges,
+        "parties": parties,
         "found_ssr_text": found,
     }
 
@@ -626,12 +947,18 @@ def parse_html_snapshot(html: str | None) -> dict[str, Any]:
         filed = filed or f
         caption = caption or c
     ssr = extract_ssr_facts(raw)
+    caption = caption or ssr["caption"]
+    if caption != ssr["caption"]:
+        parties = parse_parties_from_ssr_text(html_to_text(raw), caption=caption)
+    else:
+        parties = ssr["parties"]
     return {
         "filed_date": filed or ssr["filed_date"],
-        "caption": caption or ssr["caption"],
+        "caption": caption,
         "case_status": ssr["case_status"],
         "county_name": ssr["county_name"],
         "charges": ssr["charges"],
+        "parties": parties,
         "found_structured_json": found_json,
         "found_ssr_text": ssr["found_ssr_text"],
     }
@@ -755,11 +1082,13 @@ def parse_wcca_bronze_row(
     case_status: str | None = None
     county_name: str | None = None
     charges: tuple[ChargeRow, ...] = ()
+    parties: tuple[PartyRow, ...] = ()
     found_json = False
     found_ssr = False
     fmt = (payload_format or "").strip().lower()
     if fmt == "json":
         filed_date, caption, found_json = parse_json_payload(payload)
+        parties = parse_parties_from_ssr_text("", caption=caption)
     elif fmt == "html_snapshot":
         parsed_html = parse_html_snapshot(payload)
         filed_date = parsed_html["filed_date"]
@@ -767,6 +1096,7 @@ def parse_wcca_bronze_row(
         case_status = parsed_html["case_status"]
         county_name = parsed_html["county_name"]
         charges = parsed_html["charges"]
+        parties = parsed_html["parties"]
         found_json = parsed_html["found_structured_json"]
         found_ssr = parsed_html["found_ssr_text"]
         if not found_json and not found_ssr:
@@ -803,6 +1133,7 @@ def parse_wcca_bronze_row(
         case_status=case_status,
         county_name=county_name,
         charges=charges,
+        parties=parties,
         payload_parse_status=status,
         dq_flags=tuple(sorted(set(flags))),
         notes=tuple(notes),

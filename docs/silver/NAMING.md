@@ -7,15 +7,15 @@
 
 This doc is the durable contract for Silver identifiers and transforms. It **mirrors** Bronze national-first principles: state is a **dimension / module**, never the top-level product prefix. Silver **reads** Bronze; it never writes Bronze.
 
-HTML snapshot parseability (what SSR text can and cannot fill) is documented in [`docs/silver/WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md).
+HTML snapshot parseability (what SSR text can and cannot fill) is documented in [`docs/silver/WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md). Match/review (employer subject vs `court_party`) is a **design sketch** in [`docs/silver/MATCH_REVIEW.md`](MATCH_REVIEW.md) — not a Silver table and not a hire/FCRA output.
 
 ## Principles
 
 1. **National-first.** Catalogs, schemas, top-level repo folders, and job names describe the US court-source product. Do not make `wi` (or any state) the only top-level product prefix. No `wi_*` product tables, catalogs, or schemas.
 2. **State as dimension.** Persist `state_code` (ISO-3166-2 subdivision without country, e.g. `WI`). Source-specific parsers live under `sources/<source_id>/` (MVP: `sources/wcca/parse.py`).
-3. **Analytics-ready, not matched.** Silver cleanses and types Bronze payloads into current-row case facts plus lineage. No person-matching, hire/no-hire, FCRA packages, or Gold.
+3. **Analytics-ready, not a hire decision.** Silver cleanses and types Bronze payloads into current-row case / charge / party facts plus lineage. No hire/no-hire, FCRA packages, or Gold. Person **matching** is a separate review-queue design (`MATCH_REVIEW.md`), not a scored Silver table in this version.
 4. **Do not invent court facts.** Fill a column only from identifiers, URL query params, explicit JSON keys, or the documented WCCA HTML SSR regexes in `docs/silver/WCCA_HTML_SSR.md`. If a field is not clearly present, store `NULL` and set `dq_flags` / an honest `payload_parse_status`. Unrelated page chrome (home titles, script bundles) is not a caption.
-5. **Idempotent transforms.** Re-running the same Bronze keys must converge on one Silver case row and the current set of charge rows (type-1 overwrite). `transform_run` always **appends**.
+5. **Idempotent transforms.** Re-running the same Bronze keys must converge on one Silver case row and the current set of charge and party rows (type-1 overwrite). `transform_run` always **appends**.
 6. **Never scrape.** Transforms consume already-landed Bronze rows only. No HTTP to WCCA or any court site.
 
 ## Unity Catalog / object names
@@ -34,9 +34,10 @@ Do **not** create `wi_*` catalogs/schemas. Wisconsin appears only as `state_code
 |-------|---------|
 | `us_criminal_bg.silver.court_case` | One **current** analytics-ready case row per natural key |
 | `us_criminal_bg.silver.court_charge` | One **current** charge row per case count number |
+| `us_criminal_bg.silver.court_party` | One **current** party row per role + ordinal (defendant / plaintiff / aka / other) |
 | `us_criminal_bg.silver.transform_run` | One row per Silver transform **attempt** (success or failure) |
 
-Person entities, events, and match keys remain out of scope. Charges are in because WCCA HTML SSR exposes a stable count/statute/description/severity grid.
+Person **match scores** remain out of scope for Silver tables. `court_party` is source-extracted party facts for later review UI, not a match graph. Race is **omitted** from this table (WCCA often labels it; it is agency-provided and subjective; matching must not require it).
 
 ## Natural keys and SCD
 
@@ -52,6 +53,15 @@ Person entities, events, and match keys remain out of scope. Charges are in beca
 - **Natural key:** `(source_system, state_code, source_record_id, charge_count)` — type-1 MERGE.
 - `charge_count` is the source **Count no.** (not a dense array index).
 - Re-running a case replaces matching counts and **deletes** counts that disappeared for that case in the current Bronze payload.
+- Lineage columns (`ingest_run_id`, `ingested_at`, `payload_sha256`, `transform_run_id`) match the parent case row used for the run.
+
+### `court_party`
+
+- **Natural key:** `(source_system, state_code, source_record_id, party_role, party_ordinal)` — type-1 MERGE.
+- `party_role` is one of `defendant`, `plaintiff`, `aka`, `other`. WI criminal captions typically yield **plaintiff 1** (`State of Wisconsin`) and **defendant 1**; `aka` ordinals follow **document order** of also-known-as name lines in this payload (not a source-assigned party id).
+- Re-running a case replaces matching role+ordinal rows and **deletes** role+ordinals that disappeared for that case in the current Bronze payload (same stale-key pattern as `court_charge`).
+- `raw_name` is required on emitted rows. `name_last` / `name_first` / `name_middle` are filled only for reliable `Last, First[ Middle…]` tokens; otherwise null (`ambiguous_name_parts`). Organizational plaintiff names stay unsplit.
+- `dob` is DATE only from an explicit `Date of birth` label. Never from filing date, caption, or inference. `sex` and `address_raw` only from those labels. Race is not a column.
 - Lineage columns (`ingest_run_id`, `ingested_at`, `payload_sha256`, `transform_run_id`) match the parent case row used for the run.
 
 ### `transform_run`
@@ -108,6 +118,23 @@ Silver-owned `court_charge` columns:
 | `modifier_text` | string null | Remainder of the Modifier line |
 | `silver_schema_version` | string | `silver.court_charge.v1` |
 
+Silver-owned `court_party` columns:
+
+| Column | Type (logical) | Meaning |
+|--------|----------------|---------|
+| `party_role` | string | `defendant` \| `plaintiff` \| `aka` \| `other` (MERGE key part) |
+| `party_ordinal` | int | Stable within role for this payload (MERGE key part); 1-based document order |
+| `raw_name` | string | Source name string (required when a row is emitted) |
+| `name_last` / `name_first` / `name_middle` | string null | Split only when `Last, First[ Middle…]` is reliable; else null |
+| `dob` | date null | From labeled `Date of birth MM-DD-YYYY` only |
+| `sex` | string null | From labeled `Sex Male\|Female\|Unknown` only |
+| `address_raw` | string null | From labeled `Address` text only (not parsed into street/city/zip) |
+| `payload_parse_status` | string | `html_ssr_v1` for labeled/caption-plaintiff rows; `html_ssr_partial` when defendant name is caption fallback |
+| `dq_flags` | array\<string\> | Party-level flags (see below) |
+| `silver_schema_version` | string | `silver.court_party.v1` |
+
+Race is **not** stored. If a later version adds a raw agency race label, it must be documented as subjective and matching must not require it.
+
 ### `payload_parse_status` vocabulary
 
 | Value | When |
@@ -130,6 +157,10 @@ Silver-owned `court_charge` columns:
 | `invalid_county_code` | WCCA county token is not numeric |
 | `missing_caption` | `caption` is null |
 | `missing_charges` | HTML SSR case text was found but zero charge rows parsed |
+| `ambiguous_name_parts` | `court_party.raw_name` present but `Last, First` split was not reliable (omitted on organizational plaintiff) |
+| `missing_dob` | Defendant party row with no labeled `Date of birth` |
+| `defendant_from_caption` | Defendant `raw_name` taken from the caption `vs.` clause because `Defendant name` was absent |
+| `dob_unparsed` | `Date of birth` label present but the token was not a valid date |
 | `missing_filed_date` | `filed_date` is null |
 | `missing_source_url` | Bronze `source_url` is null/blank |
 | `unparsed_html_spa` | `payload_format=html_snapshot` and no SSR case text and no recognized structured JSON case object |
@@ -144,7 +175,7 @@ Live Bronze sample (workspace proof; **not** a fixture of defendant identity):
 - `source_system=wcca`, `state_code=WI`
 - `source_record_id=51:2026CF000028` → `{countyNo}:{caseNo}`
 - `source_url` query params `countyNo` and `caseNo` are reliable structured inputs
-- `payload_format=html_snapshot` with **server-rendered** title, caption, filing date, status, and charges grid — not an empty SPA shell
+- `payload_format=html_snapshot` with **server-rendered** title, caption, filing date, status, charges grid, and defendant / aka labels — not an empty SPA shell
 
 Parser input precedence (`sources/wcca/parse.py`):
 
@@ -166,13 +197,16 @@ Expected Silver attributes for that live Bronze grain after this parser (no defe
 | `case_status` | present from the `Case status` label |
 | `payload_parse_status` | `html_ssr_v1` when caption + filed_date + ≥1 charge succeed |
 | `court_charge` | N rows keyed by source count number (statute / description / severity; optional modifier on Python path) |
+| `court_party` | **plaintiff 1** (`State of Wisconsin`), **defendant 1** (labeled `Defendant name` when present), **aka N** = count of also-known-as name lines (do not commit live names/DOB/address) |
 | DQ | `missing_caption` / `missing_filed_date` / `unparsed_html_spa` omitted when those fields parse |
+
+Live SSR for that grain includes a defendant block with labeled name, date of birth, sex, race, and address, plus also-known-as name lines. Silver persists name / DOB / sex / address_raw when labeled; it does **not** persist race. Warehouse apply of `court_party` is coordinator-side.
 
 ## DQ rules (row-level)
 
-1. Natural-key columns are NOT NULL (inherited from Bronze; `charge_count` NOT NULL on `court_charge`).
+1. Natural-key columns are NOT NULL (inherited from Bronze; `charge_count` NOT NULL on `court_charge`; `party_role` / `party_ordinal` / `raw_name` NOT NULL on `court_party`).
 2. `dq_flags` is NOT NULL (use `array()` empty, never SQL `NULL`).
-3. Missing facts → null column + flag; do not default dates, names, or charges.
+3. Missing facts → null column + flag; do not default dates, names, or charges. Do not invent DOB or address when those labels are absent.
 4. `case_type` may be filled from the case-number pattern without lifting `payload_parse_status` by itself (it is not a payload fact).
 5. Transforms must not UPDATE/INSERT/DELETE `us_criminal_bg.bronze.*`.
 
@@ -183,18 +217,19 @@ docs/
   bronze/NAMING.md
   silver/NAMING.md          ← this file (contract)
   silver/WCCA_HTML_SSR.md   ← what HTML snapshots can/cannot fill
+  silver/MATCH_REVIEW.md    ← subject vs court_party review-queue sketch
 sources/
   wcca/parse.py             ← WI WCCA identifier / URL / SSR / JSON parser
   wcca/tests/               ← synthetic fixtures; never claimed as real court records
 silver/
-  schemas/                  ← Unity Catalog DDL (court_case, court_charge, transform_run)
-  transforms/               ← Spark SQL + Python MERGE
+  schemas/                  ← Unity Catalog DDL (court_case, court_charge, court_party, transform_run)
+  transforms/               ← Spark SQL + Python MERGE; match_review_sketch.py is docs-only
   jobs/README.md            ← how to run
 ```
 
 ## Out of scope (do not put in Silver)
 
-- Person matching, defendant graphs, hire/no-hire, FCRA adverse-action packages, Gold marts
+- Person match **tables**, hire/no-hire, FCRA adverse-action packages, Gold marts (review-queue **design** lives in `MATCH_REVIEW.md` and must not be treated as a hiring engine)
 - Invented or hallucinated court records; county-name lookup tables that can be wrong
 - Secrets, PATs, cookies, CAPTCHA tokens in git or chat
 - Scraping WCCA or mutating Bronze
@@ -206,5 +241,6 @@ Bump `silver_schema_version` when Silver columns or parse-status/flag vocabulari
 
 ### Changelog
 
+- `2026-09-16` — `silver.court_party.v1`: HTML SSR plaintiff / defendant / aka; labeled DOB/sex/address only; race omitted.
 - `2026-09-16` — `silver.court_case.v2` + `silver.court_charge.v1`: HTML SSR parser for caption / filed_date / case_status / county_name / charges; statuses `html_ssr_v1` and `html_ssr_partial`.
 - `2026-09-15` — Initial national-first Silver contract (MVP: `court_case` + `transform_run`, WCCA identifiers).
