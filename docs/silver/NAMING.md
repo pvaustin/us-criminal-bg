@@ -7,7 +7,7 @@
 
 This doc is the durable contract for Silver identifiers and transforms. It **mirrors** Bronze national-first principles: state is a **dimension / module**, never the top-level product prefix. Silver **reads** Bronze; it never writes Bronze.
 
-HTML snapshot parseability (what SSR text can and cannot fill) is documented in [`docs/silver/WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md). Party table `us_criminal_bg.silver.court_party` is documented in [`docs/silver/COURT_PARTY.md`](COURT_PARTY.md). Match/review (employer subject vs `court_party`) is a **design sketch** in [`docs/silver/MATCH_REVIEW.md`](MATCH_REVIEW.md): **no silent auto-link**, MVP default **review** / **no-link**, later append-only `us_criminal_bg.silver.match_decision` (not created here). Not a hire/FCRA output.
+HTML snapshot parseability (what SSR text can and cannot fill) is documented in [`docs/silver/WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md). Party table `us_criminal_bg.silver.court_party` is documented in [`docs/silver/COURT_PARTY.md`](COURT_PARTY.md). Match/review (employer subject vs `court_party`) is a **design sketch** in [`docs/silver/MATCH_REVIEW.md`](MATCH_REVIEW.md): **no silent auto-link**, MVP default **review** / **no-link**, later append-only `us_criminal_bg.silver.match_decision` (not created here). Pilot order subject + search audit: [`docs/silver/ORDER_AUDIT.md`](ORDER_AUDIT.md). Not a hire/FCRA output.
 
 ## Principles
 
@@ -36,8 +36,10 @@ Do **not** create `wi_*` catalogs/schemas. Wisconsin appears only as `state_code
 | `us_criminal_bg.silver.court_charge` | One **current** charge row per case count number |
 | `us_criminal_bg.silver.court_party` | One **current** party row per role + ordinal (defendant / plaintiff / aka / other). Full doc: [`COURT_PARTY.md`](COURT_PARTY.md) |
 | `us_criminal_bg.silver.transform_run` | One row per Silver transform **attempt** (success or failure) |
+| `us_criminal_bg.silver.order_subject` | Pilot: one **current** employer-order subject (type-1). Full doc: [`ORDER_AUDIT.md`](ORDER_AUDIT.md) |
+| `us_criminal_bg.silver.search_audit` | Pilot: append-only search/match attempt log. Full doc: [`ORDER_AUDIT.md`](ORDER_AUDIT.md) |
 
-Person **match scores** are not type-1 fact tables. `court_party` is source-extracted party facts. Later human/suggestion decisions belong in append-only `us_criminal_bg.silver.match_decision` (named in `MATCH_REVIEW.md`; **not** created in this version). Race is **omitted** from `court_party` (agency-provided subjective; matching must not require it).
+Person **match scores** are not type-1 fact tables. `court_party` is source-extracted party facts. Later human/suggestion decisions belong in append-only `us_criminal_bg.silver.match_decision` (named in `MATCH_REVIEW.md`; **not** created in this version). Race is **omitted** from `court_party` (agency-provided subjective; matching must not require it). `order_subject` / `search_audit` are web-pilot tables (Uma may `CREATE TABLE IF NOT EXISTS`); not court-fact transforms and not a scoring job.
 
 ## Natural keys and SCD
 
@@ -221,11 +223,12 @@ docs/
   silver/COURT_PARTY.md     ← court_party schema / extraction / lineage
   silver/WCCA_HTML_SSR.md   ← what HTML snapshots can/cannot fill
   silver/MATCH_REVIEW.md    ← subject vs court_party review-queue sketch
+  silver/ORDER_AUDIT.md     ← pilot order_subject + search_audit
 sources/
   wcca/parse.py             ← WI WCCA identifier / URL / SSR / JSON parser
   wcca/tests/               ← synthetic fixtures; never claimed as real court records
 silver/
-  schemas/                  ← Unity Catalog DDL (court_case, court_charge, court_party, transform_run)
+  schemas/                  ← Unity Catalog DDL (court_case, court_charge, court_party, transform_run, order_subject, search_audit)
   transforms/               ← Spark SQL + Python MERGE; match_review_sketch.py is docs-only
   jobs/README.md            ← how to run
 ```
@@ -244,6 +247,7 @@ Bump `silver_schema_version` when Silver columns or parse-status/flag vocabulari
 
 ### Changelog
 
+- `2026-09-16` — Pilot `order_subject` (type-1) + `search_audit` (append-only): [`ORDER_AUDIT.md`](ORDER_AUDIT.md). Doc + DDL only; no warehouse apply; no scoring job.
 - `2026-09-16` — Dedicated `docs/silver/COURT_PARTY.md` for `silver.court_party.v1` (schema, extraction, live grain, match/review consume).
 - `2026-09-16` — Match/review AC1: no silent auto-link; `dob_absent` → review; named `match_decision` append store (doc only).
 - `2026-09-16` — `silver.court_party.v1`: HTML SSR plaintiff / defendant / aka; labeled DOB/sex/address only; race omitted.
