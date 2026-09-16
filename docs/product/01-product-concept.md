@@ -43,7 +43,11 @@ Give employers a **labeled, auditable WI docket lookup** — search a subject, s
 
 ## MVP slice
 
-**National product ambition; Wisconsin first.** Pipeline: WCCA → Databricks Bronze → Silver → employer-facing website. Near-term product center of gravity: **party match/review** (auto / review / no-link + provenance), not guaranteed DOB-backed identity resolution (WCCA often lacks reliable DOB).
+**National product ambition; Wisconsin employer beachhead.** Pipeline: court sources → Databricks Bronze → Silver → employer-facing website. Near-term product center of gravity: **party match/review** (auto / review / no-link + provenance), not guaranteed DOB-backed identity resolution.
+
+## Pilot data (2026-09-16)
+
+Pilot includes **WI WCCA** and **SF HF named corpus** for match/review. Beachhead remains WI employers/HR — SF is in-pilot data, not a second GTM beachhead. VA VirginiaCourtData joins when free research access is approved (non-blocking). Always label provenance; never claim certified criminal history.
 
 ## Success for a non-paying pilot
 

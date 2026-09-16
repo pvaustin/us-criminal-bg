@@ -8,12 +8,14 @@
 **Ambition:** US national criminal background verification for hiring.  
 **Slice:** Wisconsin WCCA only until you expand. Ship depth in one state before breadth.
 
-## Two supply paths
+## Supply paths (pilot)
 
 | Path | Role |
 | --- | --- |
-| **Free WCCA** | Proof path — learn extraction, Silver shape, UI honesty, match/review. Weekly ingest **paused**; bulk free-site **deferred**. |
-| **Paid WCCA API** | Scale path for more WI volume when pilot proves the product loop. |
+| **WI WCCA** | Core product path for WI employer beachhead. Weekly free-site ingest **paused**; bulk free-site **deferred**. |
+| **SF HF named corpus** | **In pilot** (match/review) alongside WI — third-party redistribution; label honestly; not certified history; not a second GTM beachhead. |
+| **VA VirginiaCourtData** | Research/pilot-adjacent when free access approved — **not blocking** close. |
+| **Paid WCCA API** | Later scale for more WI volume when the employer loop is proven. |
 
 Do not conflate “we can scrape” with “we should run weekly.” Enable is your call.
 
