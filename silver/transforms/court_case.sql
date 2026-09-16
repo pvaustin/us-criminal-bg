@@ -425,6 +425,8 @@ SELECT
   -- Statute: base parens + optional trailing digits as a SEPARATE capture.
   -- Databricks regexp_extract drops trailing [0-9]* inside the same group
   -- (live: 961.41(1m)(hm) without the 3). Concat group2 onto group1.
+  -- Trail digits must sit immediately after ≥1 closing paren and before
+  -- whitespace so 961.573(1) does not pick 3 from the decimal 573.
   concat(
     regexp_extract(
       trim(x.charge_raw),
@@ -433,7 +435,7 @@ SELECT
     ),
     regexp_extract(
       trim(x.charge_raw),
-      '^[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*([0-9]+)',
+      '^[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))+([0-9]+)(?=\\s)',
       1
     )
   ) AS statute,

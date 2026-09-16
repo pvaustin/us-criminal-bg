@@ -464,7 +464,7 @@ class SqlSsrRegexTests(unittest.TestCase):
         r"^[0-9]+ ([0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*)"
     )
     SQL_STATUTE_TRAIL = re.compile(
-        r"^[0-9]+ [0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*([0-9]+)"
+        r"^[0-9]+ [0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))+([0-9]+)(?=\s)"
     )
     SQL_STATUTE_PREFIX = re.compile(
         r"^[0-9]+ [0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*"
@@ -563,9 +563,27 @@ class SqlSsrRegexTests(unittest.TestCase):
             "1 961.41(1m)(hm)3 Possess w/Intent-Designer Drugs(>10-50g) Felony"
         )
         self.assertEqual(self.sql_statute(live_c1), "961.41(1m)(hm)3")
+        self.assertEqual(self.SQL_STATUTE_TRAIL.match(live_c1).group(1), "3")
         self.assertEqual(
             self.sql_description(live_c1),
             "Possess w/Intent-Designer Drugs(>10-50g)",
+        )
+        # Trail digits only after ≥1 closing paren, before whitespace.
+        # Old *([0-9]+) backtracks {2,4} decimal 573 → 57 and captures 3.
+        live_c4 = "4 961.573(1) Possess Drug Paraphernalia Misd. A"
+        self.assertIsNone(self.SQL_STATUTE_TRAIL.match(live_c4))
+        self.assertEqual(self.sql_statute(live_c4), "961.573(1)")
+        self.assertEqual(
+            self.sql_description(live_c4), "Possess Drug Paraphernalia"
+        )
+        old_trail = re.compile(
+            r"^[0-9]+ [0-9]{3}\.[0-9]{2,4}(?:\([^)]+\))*([0-9]+)"
+        )
+        self.assertEqual(old_trail.match(live_c4).group(1), "3")
+        self.assertNotEqual(
+            self.sql_statute(live_c4),
+            self.SQL_STATUTE_BASE.match(live_c4).group(1)
+            + old_trail.match(live_c4).group(1),
         )
 
 
