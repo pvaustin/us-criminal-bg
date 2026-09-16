@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS us_criminal_bg.silver.court_case (
   case_type STRING,
   filed_date DATE,
   caption STRING,
+  case_status STRING,
+  county_name STRING,
   payload_parse_status STRING NOT NULL,
   -- Databricks SQL requires an ARRAY element type (ARRAY<STRING>, not bare ARRAY).
   dq_flags ARRAY<STRING> NOT NULL,
@@ -45,3 +47,9 @@ CREATE TABLE IF NOT EXISTS us_criminal_bg.silver.court_case (
   transformed_at TIMESTAMP NOT NULL,
   transform_run_id STRING NOT NULL
 ) USING DELTA;
+
+-- Existing v1 tables from PR #3 need the new SSR columns.
+ALTER TABLE us_criminal_bg.silver.court_case
+  ADD COLUMN IF NOT EXISTS case_status STRING;
+ALTER TABLE us_criminal_bg.silver.court_case
+  ADD COLUMN IF NOT EXISTS county_name STRING;

@@ -1,4 +1,4 @@
-"""WCCA identifier / URL / conservative payload parser.
+"""WCCA identifier / URL / HTML SSR / conservative JSON payload parser.
 
 Never scrapes. Never invents case facts. Synthetic fixtures in tests are
 labeled as such and must not be treated as real court records.
@@ -6,6 +6,11 @@ labeled as such and must not be treated as real court records.
 Identifier contract (see docs/silver/NAMING.md):
 - source_record_id countyNo:caseNo (live Bronze sample) or WI|wcca|{county}|{case_number}
 - URL query params countyNo / caseNo are preferred when they disagree with the id
+
+HTML snapshots: live WCCA detail pages store server-rendered plain text (not an
+empty SPA shell and not a __NEXT_DATA__ case blob). After scripts/styles/tags
+are stripped, deterministic regex extracts caption, filing date, case status,
+county name, and charges. See docs/silver/WCCA_HTML_SSR.md.
 """
 
 from __future__ import annotations
@@ -20,7 +25,8 @@ from urllib.parse import parse_qs, urlparse
 
 SOURCE_SYSTEM = "wcca"
 STATE_CODE = "WI"
-SILVER_SCHEMA_VERSION = "silver.court_case.v1"
+SILVER_SCHEMA_VERSION = "silver.court_case.v2"
+SILVER_CHARGE_SCHEMA_VERSION = "silver.court_charge.v1"
 
 # CCAP case numbers: year + 2-letter type + 6-digit sequence, e.g. 2026CF000028
 CASE_NUMBER_RE = re.compile(r"^(\d{4})([A-Z]{2})(\d{6})$", re.IGNORECASE)
@@ -41,6 +47,78 @@ PRELOAD_RE = re.compile(
 FILED_DATE_KEYS = ("fileddate", "filingdate", "datefiled")
 CAPTION_KEYS = ("caption", "casecaption")
 
+_SCRIPT_STYLE_RE = re.compile(
+    r"(?is)<(script|style|noscript)\b[^>]*>.*?</\1>"
+)
+_BLOCK_TO_NL_RE = re.compile(
+    r"(?i)<br\s*/?>|</(?:p|div|tr|h[1-6]|li|table|thead|tbody|section|header|"
+    r"article|blockquote|ul|ol)>|</title>"
+)
+_TAG_RE = re.compile(r"<[^>]+>")
+_SPACES_RE = re.compile(r"[ \t\f\v]+")
+_MULTI_NL_RE = re.compile(r"\n{3,}")
+
+HTML_TITLE_RE = re.compile(r"(?is)<title[^>]*>(.*?)</title>")
+TITLE_COUNTY_RE = re.compile(
+    r"(\d{4}[A-Za-z]{2}\d{6})\s+Case Details in\s+(.+?)\s+County\b",
+    re.IGNORECASE,
+)
+CAPTION_RE = re.compile(
+    r"(State of Wisconsin\s+vs\.?\s+.+?)(?="
+    r"\s+Filing date\b|\s+Case type\b|\s+Case status\b|\s+Defendant\b|"
+    r"\s+Charges\b|\s+Count no\.|\s+Branch\b|\s+DA case\b|\n|$)",
+    re.IGNORECASE,
+)
+FILED_DATE_RE = re.compile(
+    r"Filing date\s*:?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{4})",
+    re.IGNORECASE,
+)
+CASE_STATUS_RE = re.compile(
+    r"Case status\s*:?\s*(.+?)(?="
+    r"\s+Defendant\b|\s+Date of birth\b|\s+Address\b|\s+Sex\b|\s+Race\b|"
+    r"\s+Charges\b|\s+Count no\.|\s+Filing date\b|\s+Case type\b|"
+    r"\s+Branch\b|\s+Responsible\b|\s+Prosecuting\b|\s+Defense\b|\n|$)",
+    re.IGNORECASE,
+)
+CHARGE_HEADER_RE = re.compile(
+    r"Count\s+no\.?\s+Statute\s+Description\s+Severity(?:\s+Disposition)?",
+    re.IGNORECASE,
+)
+CHARGE_SECTION_STOP_RE = re.compile(
+    r"\b(?:Court records?|Warrants?|Judgments?|Civil judgments?|"
+    r"Restitution|Receivables|This is not the official)\b",
+    re.IGNORECASE,
+)
+
+# WI statute tokens as they appear in the charges grid, e.g. 946.41(1), 961.41(3g)(e)
+STATUTE_RE = r"\d{3}\.\d{2,4}(?:\([^)]+\))*"
+SEVERITY_RE = (
+    r"(?:Felony|Misdemeanor|Misd\.?|Forfeiture|Ordinance)"
+    r"(?:\s+[A-Z0-9]{1,3})?"
+)
+CHARGE_ROW_RE = re.compile(
+    rf"(?P<count>\d+)\s+(?P<statute>{STATUTE_RE})\s+"
+    rf"(?P<description>.+?)\s+(?P<severity>{SEVERITY_RE})"
+    rf"(?:\s+(?!Modifier:)(?!\d+\s+{STATUTE_RE})(?P<disposition>.+?))?"
+    rf"(?=\s+Modifier:|\s+\d+\s+{STATUTE_RE}|\s*$)",
+    re.IGNORECASE,
+)
+LINE_CHARGE_RE = re.compile(
+    rf"^(?P<count>\d+)\s+(?P<statute>{STATUTE_RE})\s+"
+    rf"(?P<description>.+?)\s+(?P<severity>{SEVERITY_RE})"
+    rf"(?:\s+(?P<disposition>.*))?$",
+    re.IGNORECASE,
+)
+MODIFIER_RE = re.compile(
+    rf"Modifier:\s+(?P<mod_statute>{STATUTE_RE})\s+(?P<mod_text>.+?)"
+    rf"(?=\s+Modifier:|\s+\d+\s+{STATUTE_RE}|\s*$)",
+    re.IGNORECASE,
+)
+LINE_MODIFIER_RE = re.compile(
+    rf"^Modifier:\s+(?P<mod_statute>{STATUTE_RE})\s+(?P<mod_text>.+)$",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class IdentifierParts:
@@ -50,12 +128,35 @@ class IdentifierParts:
 
 
 @dataclass(frozen=True)
+class ChargeRow:
+    charge_count: int
+    statute: str
+    description: str
+    severity: str
+    modifier_statute: str | None = None
+    modifier_text: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "charge_count": self.charge_count,
+            "statute": self.statute,
+            "description": self.description,
+            "severity": self.severity,
+            "modifier_statute": self.modifier_statute,
+            "modifier_text": self.modifier_text,
+        }
+
+
+@dataclass(frozen=True)
 class WccaParseResult:
     county_code: str | None
     case_number: str | None
     case_type: str | None
     filed_date: date | None
     caption: str | None
+    case_status: str | None
+    county_name: str | None
+    charges: tuple[ChargeRow, ...]
     payload_parse_status: str
     dq_flags: tuple[str, ...]
     silver_schema_version: str = SILVER_SCHEMA_VERSION
@@ -67,6 +168,14 @@ def _blank_to_none(value: str | None) -> str | None:
         return None
     stripped = unescape(str(value)).strip()
     return stripped or None
+
+
+def _collapse_ws(value: str | None) -> str | None:
+    raw = _blank_to_none(value)
+    if raw is None:
+        return None
+    collapsed = re.sub(r"\s+", " ", raw).strip()
+    return collapsed or None
 
 
 def _normalize_county(value: str | None) -> str | None:
@@ -183,11 +292,25 @@ def _parse_filed_date(value: Any) -> date | None:
             return datetime.fromisoformat(iso).date()
     except ValueError:
         pass
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+    for fmt, slen in (
+        ("%Y-%m-%d", 10),
+        ("%m/%d/%Y", 10),
+        ("%m-%d-%Y", 10),
+        ("%m/%d/%Y", 8),
+        ("%m-%d-%Y", 8),
+    ):
+        chunk = text[:slen] if slen <= len(text) else text
         try:
-            return datetime.strptime(text[:10], fmt).date()
+            return datetime.strptime(chunk, fmt).date()
         except ValueError:
             continue
+    # Flexible M-D-YYYY / MM-DD-YYYY
+    m = re.match(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$", text)
+    if m:
+        try:
+            return date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+        except ValueError:
+            return None
     return None
 
 
@@ -216,7 +339,186 @@ def extract_structured_facts(payload_obj: Any) -> tuple[date | None, str | None,
     return filed, caption, found
 
 
-def parse_html_snapshot(html: str | None) -> tuple[date | None, str | None, bool]:
+def html_to_text(html: str | None) -> str:
+    """Strip scripts/styles/tags. Keep block boundaries as newlines."""
+    raw = html if html else ""
+    text = _SCRIPT_STYLE_RE.sub("\n", raw)
+    text = _BLOCK_TO_NL_RE.sub("\n", text)
+    text = _TAG_RE.sub(" ", text)
+    text = unescape(text)
+    text = _SPACES_RE.sub(" ", text)
+    text = _MULTI_NL_RE.sub("\n\n", text)
+    lines = [_collapse_ws(ln) or "" for ln in text.splitlines()]
+    return "\n".join(ln for ln in lines if ln)
+
+
+def _title_county_name(html: str, text: str) -> str | None:
+    title_html = HTML_TITLE_RE.search(html or "")
+    candidates = []
+    if title_html:
+        candidates.append(unescape(re.sub(r"\s+", " ", title_html.group(1)).strip()))
+    candidates.append(text)
+    for blob in candidates:
+        match = TITLE_COUNTY_RE.search(blob or "")
+        if match:
+            return _collapse_ws(match.group(2))
+    return None
+
+
+def _first_group(pattern: re.Pattern[str], text: str) -> str | None:
+    match = pattern.search(text)
+    if not match:
+        return None
+    return _collapse_ws(match.group(1))
+
+
+def _charge_from_match(match: re.Match[str]) -> ChargeRow | None:
+    try:
+        count = int(match.group("count"))
+    except (TypeError, ValueError):
+        return None
+    statute = _collapse_ws(match.group("statute"))
+    description = _collapse_ws(match.group("description"))
+    severity = _collapse_ws(match.group("severity"))
+    if not statute or not description or not severity:
+        return None
+    return ChargeRow(
+        charge_count=count,
+        statute=statute,
+        description=description,
+        severity=severity,
+    )
+
+
+def _attach_modifier(charge: ChargeRow, mod: re.Match[str]) -> ChargeRow:
+    return ChargeRow(
+        charge_count=charge.charge_count,
+        statute=charge.statute,
+        description=charge.description,
+        severity=charge.severity,
+        modifier_statute=_collapse_ws(mod.group("mod_statute")),
+        modifier_text=_collapse_ws(mod.group("mod_text")),
+    )
+
+
+def _charges_slice(text: str) -> str | None:
+    header = CHARGE_HEADER_RE.search(text)
+    if not header:
+        return None
+    rest = text[header.end() :]
+    stop = CHARGE_SECTION_STOP_RE.search(rest)
+    if stop:
+        rest = rest[: stop.start()]
+    return rest.strip()
+
+
+def _parse_charges_lines(text: str) -> tuple[ChargeRow, ...]:
+    rest = _charges_slice(text)
+    if rest is None:
+        return ()
+    rows: list[ChargeRow] = []
+    pending: ChargeRow | None = None
+    for raw_line in rest.splitlines():
+        line = _collapse_ws(raw_line)
+        if not line:
+            continue
+        mod = LINE_MODIFIER_RE.match(line)
+        if mod and pending is not None:
+            if pending.modifier_statute is None:
+                pending = _attach_modifier(pending, mod)
+            continue
+        row_match = LINE_CHARGE_RE.match(line)
+        if row_match:
+            parsed = _charge_from_match(row_match)
+            if parsed is None:
+                continue
+            if pending is not None:
+                rows.append(pending)
+            pending = parsed
+            leftover = _collapse_ws(row_match.groupdict().get("disposition"))
+            if leftover:
+                inline_mod = LINE_MODIFIER_RE.match(leftover) or re.match(
+                    r"\s*" + MODIFIER_RE.pattern, leftover, re.IGNORECASE
+                )
+                if inline_mod:
+                    pending = _attach_modifier(pending, inline_mod)
+    if pending is not None:
+        rows.append(pending)
+    return tuple(rows)
+
+
+def _parse_charges_collapsed(text: str) -> tuple[ChargeRow, ...]:
+    rest = _charges_slice(text)
+    if rest is None:
+        return ()
+    collapsed = _collapse_ws(rest) or ""
+    rows: list[ChargeRow] = []
+    pos = 0
+    while pos < len(collapsed):
+        row_match = CHARGE_ROW_RE.search(collapsed, pos)
+        if not row_match:
+            break
+        parsed = _charge_from_match(row_match)
+        pos = row_match.end()
+        if parsed is None:
+            continue
+        mod = re.match(r"\s*" + MODIFIER_RE.pattern, collapsed[pos:], re.IGNORECASE)
+        if mod:
+            parsed = _attach_modifier(parsed, mod)
+            pos += mod.end()
+        rows.append(parsed)
+    return tuple(rows)
+
+
+def parse_charges_from_ssr_text(text: str) -> tuple[ChargeRow, ...]:
+    """Parse charge rows from stripped SSR text. Empty if the grid is absent.
+
+    Prefer the collapsed (single-line) parser so same-line ``Modifier:`` tokens
+    attach to the preceding count. Fall back to per-line rows when needed.
+    """
+    collapsed = _parse_charges_collapsed(text)
+    if collapsed:
+        return collapsed
+    return _parse_charges_lines(text)
+
+
+def extract_ssr_facts(html: str | None) -> dict[str, Any]:
+    """Deterministic SSR fields from visible HTML text. Never invents."""
+    raw = html if html else ""
+    text = html_to_text(raw)
+    collapsed = _collapse_ws(text) or ""
+    county_name = _title_county_name(raw, text) or _title_county_name(raw, collapsed)
+    caption = _first_group(CAPTION_RE, text) or _first_group(CAPTION_RE, collapsed)
+    filed_raw = _first_group(FILED_DATE_RE, text) or _first_group(
+        FILED_DATE_RE, collapsed
+    )
+    filed_date = _parse_filed_date(filed_raw)
+    case_status = _first_group(CASE_STATUS_RE, text) or _first_group(
+        CASE_STATUS_RE, collapsed
+    )
+    charges = parse_charges_from_ssr_text(text)
+    found = bool(
+        county_name
+        or caption
+        or filed_date
+        or case_status
+        or charges
+        or CHARGE_HEADER_RE.search(text)
+        or TITLE_COUNTY_RE.search(text)
+        or TITLE_COUNTY_RE.search(collapsed)
+    )
+    return {
+        "filed_date": filed_date,
+        "caption": caption,
+        "case_status": case_status,
+        "county_name": county_name,
+        "charges": charges,
+        "found_ssr_text": found,
+    }
+
+
+def parse_html_snapshot(html: str | None) -> dict[str, Any]:
+    """JSON embeds (if any) plus SSR text. JSON explicit keys win on overlap."""
     raw = html if html else ""
     blobs: list[Any] = []
     for match in SCRIPT_JSON_RE.finditer(raw):
@@ -234,13 +536,22 @@ def parse_html_snapshot(html: str | None) -> tuple[date | None, str | None, bool
             continue
     filed: date | None = None
     caption: str | None = None
-    found = False
+    found_json = False
     for blob in blobs:
         f, c, ok = extract_structured_facts(blob)
-        found = found or ok
+        found_json = found_json or ok
         filed = filed or f
         caption = caption or c
-    return filed, caption, found
+    ssr = extract_ssr_facts(raw)
+    return {
+        "filed_date": filed or ssr["filed_date"],
+        "caption": caption or ssr["caption"],
+        "case_status": ssr["case_status"],
+        "county_name": ssr["county_name"],
+        "charges": ssr["charges"],
+        "found_structured_json": found_json,
+        "found_ssr_text": ssr["found_ssr_text"],
+    }
 
 
 def parse_json_payload(payload: str | None) -> tuple[date | None, str | None, bool]:
@@ -278,6 +589,35 @@ def merge_identifiers(
     return county, case_no, mismatch
 
 
+def _payload_parse_status(
+    *,
+    county: str | None,
+    case_no: str | None,
+    caption: str | None,
+    filed_date: date | None,
+    charges: tuple[ChargeRow, ...],
+    found_json: bool,
+    found_ssr: bool,
+    case_status: str | None,
+    county_name: str | None,
+) -> str:
+    if county is None or case_no is None:
+        return "identifier_error"
+    if caption is not None and filed_date is not None and len(charges) >= 1:
+        return "html_ssr_v1"
+    if found_ssr and (
+        caption is not None
+        or filed_date is not None
+        or charges
+        or case_status is not None
+        or county_name is not None
+    ):
+        return "html_ssr_partial"
+    if found_json and (caption is not None or filed_date is not None):
+        return "structured_facts"
+    return "identifiers_only"
+
+
 def parse_wcca_bronze_row(
     *,
     source_system: str | None,
@@ -300,6 +640,9 @@ def parse_wcca_bronze_row(
             case_type=None,
             filed_date=None,
             caption=None,
+            case_status=None,
+            county_name=None,
+            charges=(),
             payload_parse_status="unsupported_source",
             dq_flags=tuple(sorted(set(flags))),
             notes=("no silver parser for this source_system",),
@@ -326,27 +669,47 @@ def parse_wcca_bronze_row(
 
     filed_date: date | None = None
     caption: str | None = None
-    found_structured = False
+    case_status: str | None = None
+    county_name: str | None = None
+    charges: tuple[ChargeRow, ...] = ()
+    found_json = False
+    found_ssr = False
     fmt = (payload_format or "").strip().lower()
     if fmt == "json":
-        filed_date, caption, found_structured = parse_json_payload(payload)
+        filed_date, caption, found_json = parse_json_payload(payload)
     elif fmt == "html_snapshot":
-        filed_date, caption, found_structured = parse_html_snapshot(payload)
-        if not found_structured:
+        parsed_html = parse_html_snapshot(payload)
+        filed_date = parsed_html["filed_date"]
+        caption = parsed_html["caption"]
+        case_status = parsed_html["case_status"]
+        county_name = parsed_html["county_name"]
+        charges = parsed_html["charges"]
+        found_json = parsed_html["found_structured_json"]
+        found_ssr = parsed_html["found_ssr_text"]
+        if not found_json and not found_ssr:
             flags.append("unparsed_html_spa")
-            notes.append("react spa snapshot: no structured case embed")
+            notes.append("html snapshot: no SSR case text and no structured JSON embed")
+        elif found_ssr:
+            notes.append("html_ssr_v1 regex parser on stripped snapshot text")
 
     if caption is None:
         flags.append("missing_caption")
     if filed_date is None:
         flags.append("missing_filed_date")
+    if fmt == "html_snapshot" and found_ssr and not charges:
+        flags.append("missing_charges")
 
-    if county is None or case_no is None:
-        status = "identifier_error"
-    elif found_structured and (caption is not None or filed_date is not None):
-        status = "structured_facts"
-    else:
-        status = "identifiers_only"
+    status = _payload_parse_status(
+        county=county,
+        case_no=case_no,
+        caption=caption,
+        filed_date=filed_date,
+        charges=charges,
+        found_json=found_json,
+        found_ssr=found_ssr,
+        case_status=case_status,
+        county_name=county_name,
+    )
 
     return WccaParseResult(
         county_code=county,
@@ -354,6 +717,9 @@ def parse_wcca_bronze_row(
         case_type=case_type,
         filed_date=filed_date,
         caption=caption,
+        case_status=case_status,
+        county_name=county_name,
+        charges=charges,
         payload_parse_status=status,
         dq_flags=tuple(sorted(set(flags))),
         notes=tuple(notes),

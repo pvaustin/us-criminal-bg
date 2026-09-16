@@ -19,11 +19,12 @@ Synthetic HTML under `sources/wcca/tests/fixtures/` is **not** a real court reco
 
 ## Apply DDL (Databricks SQL warehouse)
 
-Operator-only. The cloud agent that added this tree did **not** apply Silver DDL in the workspace.
+Operator-only. The cloud agent that added this tree does **not** apply Silver DDL in the workspace.
 
 1. Open a SQL warehouse on `dbc-a0dcbe75-2647.cloud.databricks.com`.
-2. Run [`silver/schemas/court_case.sql`](../schemas/court_case.sql) (`CREATE SCHEMA/TABLE IF NOT EXISTS`).
-3. Confirm `us_criminal_bg.silver.court_case` and `us_criminal_bg.silver.transform_run` exist.
+2. Run [`silver/schemas/court_case.sql`](../schemas/court_case.sql) (`CREATE SCHEMA/TABLE IF NOT EXISTS` plus `ADD COLUMN IF NOT EXISTS` for `case_status` / `county_name`).
+3. Run [`silver/schemas/court_charge.sql`](../schemas/court_charge.sql).
+4. Confirm `us_criminal_bg.silver.court_case`, `us_criminal_bg.silver.court_charge`, and `us_criminal_bg.silver.transform_run` exist.
 
 Non-secret workspace notes (same as Bronze): host `dbc-a0dcbe75-2647.cloud.databricks.com`, workspace id `7474648418210162`. Auth stays in the Databricks CLI profile / workspace — never commit `.databrickscfg` or tokens.
 
@@ -31,29 +32,35 @@ Optional env (not secrets): `DATABRICKS_CONFIG_PROFILE`, `DATABRICKS_WAREHOUSE_I
 
 ## Run the transform
 
-### A. Spark SQL, identifiers only (SQL warehouse)
+Both paths materialize `transform_run_id` once into `us_criminal_bg.silver._this_transform_run` (Delta scratch) and finalize with `status='running' AND transform_run_id IN (SELECT … FROM _this_transform_run)`, then drop the scratch table.
+
+### A. Spark SQL warehouse (SSR regex)
 
 Run [`silver/transforms/court_case.sql`](../transforms/court_case.sql).
 
 - Parses `source_record_id` and URL `countyNo` / `caseNo`.
-- Leaves `filed_date` / `caption` null (HTML SPA facts are not guessed in SQL).
-- `MERGE` on `(source_system, state_code, source_record_id)` — type-1 overwrite.
-- Inserts one `transform_run` row per attempt (`running` → `succeeded`).
-- Re-running for the same Bronze keys updates the same `court_case` row; it does not duplicate it.
+- Strips scripts/styles/tags from `payload` and regex-extracts caption, filing date, case status, county name, and charge cores.
+- `modifier_statute` / `modifier_text` are left **null** in SQL (use the Python job for modifiers).
+- `MERGE` `court_case` on `(source_system, state_code, source_record_id)`.
+- `MERGE` `court_charge` on that key plus `charge_count`; deletes stale counts for cases in the run.
+- Inserts one `transform_run` row per attempt (`running` → `succeeded`). `row_count` is `court_case` rows for that run id.
 
-### B. Python parser on a Databricks cluster (optional HTML/JSON embeds)
+### B. Python parser on a Databricks cluster (complete SSR, including modifiers)
 
 ```bash
 python3 silver/transforms/court_case.py --apply
 ```
 
-Requires a Spark session (Databricks cluster / notebook with repo on `sys.path`). Uses `sources/wcca/parse.py` so structured `application/json` script tags can fill caption / filed_date when those keys are explicitly present; otherwise same null + DQ behavior as SQL.
+Requires a Spark session (Databricks cluster / notebook with repo on `sys.path`). Uses `sources/wcca/parse.py` so HTML SSR and structured `application/json` script tags fill Silver; charge `Modifier:` lines populate `modifier_*`.
+
+Prefer this path for `html_ssr_v1` on live WCCA snapshots.
 
 ## Idempotency
 
 | Table | Re-run behavior |
 |-------|-----------------|
 | `silver.court_case` | Upsert on `(source_system, state_code, source_record_id)` |
+| `silver.court_charge` | Upsert on `(source_system, state_code, source_record_id, charge_count)`; extra counts for processed cases are deleted |
 | `silver.transform_run` | Always append a new attempt row |
 
 Business attributes for a given Bronze key converge; `transformed_at` / `transform_run_id` change each run (type-1 current row metadata).
