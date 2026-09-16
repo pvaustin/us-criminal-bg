@@ -32,3 +32,15 @@ Defaults (env-overridable, not secrets):
 | `DATABRICKS_WAREHOUSE_ID` | `e40cabf0355df274` |
 
 `databricks fs mkdir` / `cp` use `dbfs:/Volumes/...` (a bare `/Volumes` path is treated as local). Auth is the CLI profile — do not commit `.databrickscfg`, tokens, or real case HTML.
+
+## `rest_bulk` research CLI (`load_sf_criminal_hf.py`)
+
+Downloads the published Hugging Face `cases.parquet` (SF named corpus) into the UC volume and MERGE `court_case_raw`. **Research-only**, isolated from WI. Does **not** scrape courts, does **not** load Virginia anonymized CSVs, does **not** load Cook County.
+
+```bash
+python3 bronze/jobs/load_sf_criminal_hf.py --dry-run
+python3 bronze/jobs/load_sf_criminal_hf.py
+python3 bronze/jobs/load_sf_criminal_hf.py --limit 50
+```
+
+Same env defaults as the WCCA CLI (`DATABRICKS_CONFIG_PROFILE`, `DATABRICKS_WAREHOUSE_ID`). Do not commit parquet files. Grain: `source_record_id=sf_case:{case_id}`; payload stamps `county=San Francisco`, `locality=SF`. Live proof 2026-09-16: 77,406 rows, `ingest_run_id=26a31a80-a06f-4870-ab9e-cda5db38f47f` — see [`docs/bronze/ACCESS_SF_CRIMINAL_HF.md`](../../docs/bronze/ACCESS_SF_CRIMINAL_HF.md).

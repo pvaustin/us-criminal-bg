@@ -11,3 +11,4 @@ venv/
 .env
 *.html
 !sources/wcca/tests/fixtures/*.html
+*.parquet

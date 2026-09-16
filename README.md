@@ -19,6 +19,8 @@ US criminal background verification — court-source data platform.
 - Match / review sketch: [`docs/silver/MATCH_REVIEW.md`](docs/silver/MATCH_REVIEW.md)
 - Pilot order subject + search audit: [`docs/silver/ORDER_AUDIT.md`](docs/silver/ORDER_AUDIT.md)
 - Source access / ToS notes: [`docs/bronze/ACCESS.md`](docs/bronze/ACCESS.md)
+- VA research (gated named; no anonymized load): [`docs/bronze/ACCESS_VA_COURT_DATA.md`](docs/bronze/ACCESS_VA_COURT_DATA.md)
+- SF HF research named corpus: [`docs/bronze/ACCESS_SF_CRIMINAL_HF.md`](docs/bronze/ACCESS_SF_CRIMINAL_HF.md)
 - WCCA adapter + parser: [`sources/wcca/`](sources/wcca/)
 - Bronze jobs: [`bronze/jobs/README.md`](bronze/jobs/README.md)
 - Silver jobs: [`silver/jobs/README.md`](silver/jobs/README.md)
