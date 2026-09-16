@@ -7,12 +7,12 @@
 
 This doc is the durable contract for Silver identifiers and transforms. It **mirrors** Bronze national-first principles: state is a **dimension / module**, never the top-level product prefix. Silver **reads** Bronze; it never writes Bronze.
 
-HTML snapshot parseability (what SSR text can and cannot fill) is documented in [`docs/silver/WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md). Party table `us_criminal_bg.silver.court_party` is documented in [`docs/silver/COURT_PARTY.md`](COURT_PARTY.md). Match/review (employer subject vs `court_party`) is a **design sketch** in [`docs/silver/MATCH_REVIEW.md`](MATCH_REVIEW.md): **no silent auto-link**, MVP default **review** / **no-link**, later append-only `us_criminal_bg.silver.match_decision` (not created here). Pilot order subject + search audit: [`docs/silver/ORDER_AUDIT.md`](ORDER_AUDIT.md). Not a hire/FCRA output.
+HTML snapshot parseability (what SSR text can and cannot fill) is documented in [`docs/silver/WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md). Party table `us_criminal_bg.silver.court_party` is documented in [`docs/silver/COURT_PARTY.md`](COURT_PARTY.md). SF HF research defendants (parallel `court_party` path, not WI employer product): [`docs/silver/SF_RESEARCH.md`](SF_RESEARCH.md). Match/review (employer subject vs `court_party`) is a **design sketch** in [`docs/silver/MATCH_REVIEW.md`](MATCH_REVIEW.md): **no silent auto-link**, MVP default **review** / **no-link**, later append-only `us_criminal_bg.silver.match_decision` (not created here). Pilot order subject + search audit: [`docs/silver/ORDER_AUDIT.md`](ORDER_AUDIT.md). Not a hire/FCRA output.
 
 ## Principles
 
 1. **National-first.** Catalogs, schemas, top-level repo folders, and job names describe the US court-source product. Do not make `wi` (or any state) the only top-level product prefix. No `wi_*` product tables, catalogs, or schemas.
-2. **State as dimension.** Persist `state_code` (ISO-3166-2 subdivision without country, e.g. `WI`). Source-specific parsers live under `sources/<source_id>/` (MVP: `sources/wcca/parse.py`).
+2. **State as dimension.** Persist `state_code` (ISO-3166-2 subdivision without country, e.g. `WI`). Source-specific parsers live under `sources/<source_id>/` (MVP: `sources/wcca/parse.py`; research: `sources/sf_criminal_hf/parse_party.py`).
 3. **Analytics-ready, not a hire decision.** Silver cleanses and types Bronze payloads into current-row case / charge / party facts plus lineage. No hire/no-hire, FCRA packages, or Gold. Person **matching** is a separate review-queue design (`MATCH_REVIEW.md`), not a scored Silver table in this version.
 4. **Do not invent court facts.** Fill a column only from identifiers, URL query params, explicit JSON keys, or the documented WCCA HTML SSR regexes in `docs/silver/WCCA_HTML_SSR.md`. If a field is not clearly present, store `NULL` and set `dq_flags` / an honest `payload_parse_status`. Unrelated page chrome (home titles, script bundles) is not a caption.
 5. **Idempotent transforms.** Re-running the same Bronze keys must converge on one Silver case row and the current set of charge and party rows (type-1 overwrite). `transform_run` always **appends**.
@@ -63,9 +63,9 @@ Full table doc: [`docs/silver/COURT_PARTY.md`](COURT_PARTY.md) (purpose, schema,
 
 - **Natural key:** `(source_system, state_code, source_record_id, party_role, party_ordinal)` — type-1 MERGE.
 - `party_role` is one of `defendant`, `plaintiff`, `aka`, `other`. WI criminal captions typically yield **plaintiff 1** (`State of Wisconsin`) and **defendant 1**; `aka` ordinals follow **document order** of also-known-as **person names** (`Last, First[ M]`) in this payload — not the `Name Type Date of birth` header and not court-activity text.
-- Re-running a case replaces matching role+ordinal rows and **deletes** role+ordinals that disappeared for that case in the current Bronze payload (same stale-key pattern as `court_charge`).
-- `raw_name` is required on emitted rows. `name_last` / `name_first` / `name_middle` are filled only for reliable `Last, First[ Middle…]` tokens; otherwise null (`ambiguous_name_parts`). Organizational plaintiff names stay unsplit.
-- `dob` is DATE only from an explicit `Date of birth` label. Never from filing date, caption, or inference. `sex` and `address_raw` only from those labels. Race is not a column.
+- Re-running a case replaces matching role+ordinal rows and **deletes** role+ordinals that disappeared for that case in the current Bronze payload (same stale-key pattern as `court_charge`). **SF research** uses a dedicated transform whose DELETE is scoped to `source_system='sf_criminal_hf'` / `state_code='CA'` so WI `wcca` keys are not removed ([`SF_RESEARCH.md`](SF_RESEARCH.md)).
+- `raw_name` is required on emitted rows. WCCA fills `name_last` / `name_first` / `name_middle` only for reliable `Last, First[ Middle…]` tokens; otherwise null (`ambiguous_name_parts`). Organizational plaintiff names stay unsplit. SF HF research also splits space-separated `FIRST [MIDDLE…] LAST` and flags `ambiguous_name_parts` when that heuristic is weak (single token, 4+ tokens).
+- `dob` is DATE only from an explicit `Date of birth` label. Never from filing date, caption, or inference. `sex` and `address_raw` only from those labels. Race is not a column. SF `cases.parquet` has none of those labels → null + `missing_dob` on defendants.
 - Lineage columns (`ingest_run_id`, `ingested_at`, `payload_sha256`, `transform_run_id`) match the parent case row used for the run.
 
 ### `transform_run`
@@ -129,11 +129,11 @@ Silver-owned `court_party` columns:
 | `party_role` | string | `defendant` \| `plaintiff` \| `aka` \| `other` (MERGE key part) |
 | `party_ordinal` | int | Stable within role for this payload (MERGE key part); 1-based document order |
 | `raw_name` | string | Source name string (required when a row is emitted) |
-| `name_last` / `name_first` / `name_middle` | string null | Split only when `Last, First[ Middle…]` is reliable; else null |
+| `name_last` / `name_first` / `name_middle` | string null | WCCA: split only when `Last, First[ Middle…]` is reliable; else null. SF research: comma form **or** first/last space tokens |
 | `dob` | date null | From labeled `Date of birth MM-DD-YYYY` only |
 | `sex` | string null | From labeled `Sex Male\|Female\|Unknown` only |
 | `address_raw` | string null | From labeled `Address` text only (not parsed into street/city/zip) |
-| `payload_parse_status` | string | `html_ssr_v1` for labeled/caption-plaintiff rows; `html_ssr_partial` when defendant name is caption fallback |
+| `payload_parse_status` | string | WCCA: `html_ssr_v1` / `html_ssr_partial`. SF research: `json_cases_v1` |
 | `dq_flags` | array\<string\> | Party-level flags (see below) |
 | `silver_schema_version` | string | `silver.court_party.v1` |
 
@@ -145,6 +145,7 @@ Race is **not** stored. If a later version adds a raw agency race label, it must
 |-------|------|
 | `html_ssr_v1` | Caption **and** filed_date **and** ≥1 charge parsed from HTML SSR (and/or JSON caption/date plus SSR charges) |
 | `html_ssr_partial` | Some SSR fields parsed, but not the full caption + filed_date + ≥1 charge trio |
+| `json_cases_v1` | SF HF research: JSON `defendant_name` parsed into `court_party` (`payload_format=json`, `source_system=sf_criminal_hf`) |
 | `structured_facts` | At least one of `filed_date` / `caption` taken from a structured JSON embed or `payload_format=json` object, and no SSR case text |
 | `identifiers_only` | County / case number parsed from `source_record_id` and/or URL; no structured or SSR case facts from payload |
 | `identifier_error` | Natural identifiers could not be parsed |
@@ -161,8 +162,9 @@ Race is **not** stored. If a later version adds a raw agency race label, it must
 | `invalid_county_code` | WCCA county token is not numeric |
 | `missing_caption` | `caption` is null |
 | `missing_charges` | HTML SSR case text was found but zero charge rows parsed |
-| `ambiguous_name_parts` | `court_party.raw_name` present but `Last, First` split was not reliable (omitted on organizational plaintiff) |
+| `ambiguous_name_parts` | `court_party.raw_name` present but name-part split was not reliable (WCCA `Last, First`; SF single-token / 4+ space tokens / unreliable comma). Omitted on organizational plaintiff |
 | `missing_dob` | Defendant party row with no labeled `Date of birth` |
+| `name_unparsed` | SF research: `raw_name` present but first/last parts left null |
 | `defendant_from_caption` | Defendant `raw_name` taken from the caption `vs.` clause because `Defendant name` was absent |
 | `dob_unparsed` | `Date of birth` label present but the token was not a valid date |
 | `missing_filed_date` | `filed_date` is null |
@@ -221,12 +223,15 @@ docs/
   bronze/NAMING.md
   silver/NAMING.md          ← this file (contract)
   silver/COURT_PARTY.md     ← court_party schema / extraction / lineage
+  silver/SF_RESEARCH.md     ← sf_criminal_hf research parties (experiment-only)
   silver/WCCA_HTML_SSR.md   ← what HTML snapshots can/cannot fill
   silver/MATCH_REVIEW.md    ← subject vs court_party review-queue sketch
   silver/ORDER_AUDIT.md     ← pilot order_subject + search_audit
 sources/
   wcca/parse.py             ← WI WCCA identifier / URL / SSR / JSON parser
   wcca/tests/               ← synthetic fixtures; never claimed as real court records
+  sf_criminal_hf/parse_party.py  ← CA HF JSON defendant → court_party (research)
+  sf_criminal_hf/tests/     ← synthetic names only
 silver/
   schemas/                  ← Unity Catalog DDL (court_case, court_charge, court_party, transform_run, order_subject, search_audit)
   transforms/               ← Spark SQL + Python MERGE; match_review_sketch.py is docs-only
@@ -247,6 +252,7 @@ Bump `silver_schema_version` when Silver columns or parse-status/flag vocabulari
 
 ### Changelog
 
+- `2026-09-16` — Research-only `sf_criminal_hf` / `CA` defendants → `court_party` (`json_cases_v1`). Parallel transform; WCCA path unchanged. [`SF_RESEARCH.md`](SF_RESEARCH.md).
 - `2026-09-16` — Pilot `order_subject` (type-1) + `search_audit` (append-only): [`ORDER_AUDIT.md`](ORDER_AUDIT.md). Doc + DDL only; no warehouse apply; no scoring job.
 - `2026-09-16` — Dedicated `docs/silver/COURT_PARTY.md` for `silver.court_party.v1` (schema, extraction, live grain, match/review consume).
 - `2026-09-16` — Match/review AC1: no silent auto-link; `dob_absent` → review; named `match_decision` append store (doc only).

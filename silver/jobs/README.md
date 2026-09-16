@@ -10,9 +10,11 @@ From the repo root:
 
 ```bash
 python3 -m unittest discover -s sources/wcca/tests -v
+python3 -m unittest discover -s sources/sf_criminal_hf/tests -v
 python3 -m unittest discover -s silver/transforms/tests -v
-python3 -m py_compile sources/wcca/parse.py silver/transforms/map_court_case.py silver/transforms/court_case.py silver/transforms/match_review_sketch.py
+python3 -m py_compile sources/wcca/parse.py sources/sf_criminal_hf/parse_party.py silver/transforms/map_court_case.py silver/transforms/map_court_party_sf.py silver/transforms/court_case.py silver/transforms/court_party_sf_criminal_hf.py silver/transforms/match_review_sketch.py
 python3 silver/transforms/court_case.py --help
+python3 silver/transforms/court_party_sf_criminal_hf.py --help
 ```
 
 Synthetic HTML under `sources/wcca/tests/fixtures/` is **not** a real court record.
@@ -56,6 +58,18 @@ python3 silver/transforms/court_case.py --apply
 Requires a Spark session (Databricks cluster / notebook with repo on `sys.path`). Uses `sources/wcca/parse.py` so HTML SSR and structured `application/json` script tags fill Silver; charge `Modifier:` lines populate `modifier_*`; party labeled DOB/sex/address and aka lines populate `court_party`.
 
 Prefer this path for `html_ssr_v1` on live WCCA snapshots.
+
+### C. SF HF research parties only (does not touch WI)
+
+Research-only. Reads `source_system='sf_criminal_hf'` / `state_code='CA'` Bronze JSON and MERGE `court_party` defendant rows. **DELETE is scoped to those keys** so existing `wcca` / `WI` parties are not removed. Does not write `court_case` / `court_charge`. See [`docs/silver/SF_RESEARCH.md`](../../docs/silver/SF_RESEARCH.md).
+
+SQL warehouse: [`silver/transforms/court_party_sf_criminal_hf.sql`](../transforms/court_party_sf_criminal_hf.sql).
+
+```bash
+python3 silver/transforms/court_party_sf_criminal_hf.py --apply
+```
+
+Do **not** use the WCCA `court_case.sql` / `court_case.py` job to refresh SF parties (that job still ranks all Bronze sources and could delete SF keys as `unsupported_source`).
 
 ## Idempotency
 

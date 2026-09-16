@@ -15,6 +15,7 @@ US criminal background verification — court-source data platform.
 - Bronze naming contract: [`docs/bronze/NAMING.md`](docs/bronze/NAMING.md)
 - Silver naming contract: [`docs/silver/NAMING.md`](docs/silver/NAMING.md)
 - Silver `court_party`: [`docs/silver/COURT_PARTY.md`](docs/silver/COURT_PARTY.md)
+- SF HF research parties (experiment-only): [`docs/silver/SF_RESEARCH.md`](docs/silver/SF_RESEARCH.md)
 - WCCA HTML SSR parseability: [`docs/silver/WCCA_HTML_SSR.md`](docs/silver/WCCA_HTML_SSR.md)
 - Match / review sketch: [`docs/silver/MATCH_REVIEW.md`](docs/silver/MATCH_REVIEW.md)
 - Pilot order subject + search audit: [`docs/silver/ORDER_AUDIT.md`](docs/silver/ORDER_AUDIT.md)
@@ -22,6 +23,7 @@ US criminal background verification — court-source data platform.
 - VA research (gated named; no anonymized load): [`docs/bronze/ACCESS_VA_COURT_DATA.md`](docs/bronze/ACCESS_VA_COURT_DATA.md)
 - SF HF research named corpus: [`docs/bronze/ACCESS_SF_CRIMINAL_HF.md`](docs/bronze/ACCESS_SF_CRIMINAL_HF.md)
 - WCCA adapter + parser: [`sources/wcca/`](sources/wcca/)
+- SF HF research mapper + party parser: [`sources/sf_criminal_hf/`](sources/sf_criminal_hf/)
 - Bronze jobs: [`bronze/jobs/README.md`](bronze/jobs/README.md)
 - Silver jobs: [`silver/jobs/README.md`](silver/jobs/README.md)
 
