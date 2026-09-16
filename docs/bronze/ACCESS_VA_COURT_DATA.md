@@ -1,8 +1,8 @@
 # Virginia — virginiacourtdata.org (research notes)
 
-**Status:** Spike paused. Research-only. **Not** employer product. **Not** for commercial CRA / FCRA claims. **No Bronze load.**
+**Status:** Research-only. **Not** employer product. **Not** for commercial CRA / FCRA claims. **No anonymized Bronze load.** Named access: **Prasanth will request the free account himself** (this repo does not create a virginiacourtdata.org account).
 
-This is a source-access note so Prasanth / Charlie can decide whether to request named data. It is **not** a loader spec. Do not treat anything here as landed court facts.
+This is a source-access note, **not** a loader spec. Do not treat anything here as landed court facts. Do **not** download public (anonymized) CSVs into Databricks.
 
 ## Provenance
 
@@ -131,7 +131,8 @@ Circuit/District **civil** files also exist on the site (eviction/debt reporting
 
 ## Status
 
-- Spike **paused** pending Prasanth / Charlie: **request named access** (free account, legitimate journalist / non-profit / research / government approval) **vs pivot**.
-- **No anonymized load** into Bronze for name-match.
-- **No loader**, no Databricks download job, no CSV in git, no invented sample records.
-- If named export is approved later: land published zip-CSV only under `source_system=va_court_data_org`, `state_code=VA`, `extract_method=rest_bulk`, and extend [`NAMING.md`](NAMING.md) natural keys then — not before.
+- **Prasanth will request named access himself** (free account; journalists / non-profits / research institutions / government; subject to site approval). Do **not** create a virginiacourtdata.org account from this repo or agent.
+- **No anonymized load** into Bronze for name-match. Public CSVs are not a named corpus.
+- **No VA loader** in this repo: no Databricks job that downloads public CSVs, no CSV in git, no invented sample records.
+- If named export is later approved: land published zip-CSV only under `source_system=va_court_data_org`, `state_code=VA`, `extract_method=rest_bulk`, and extend [`NAMING.md`](NAMING.md) natural keys then — not before.
+- Cook County is **out of scope**. Wisconsin WCCA remains the employer MVP path; this VA note does not change it.

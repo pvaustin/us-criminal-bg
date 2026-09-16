@@ -14,8 +14,12 @@
 
 ## Virginia — virginiacourtdata.org (research notes only)
 
-Research spike, **not** MVP, **not** employer product, **not** for commercial CRA claims. Independent hobby redistribution (not Commonwealth-affiliated). Public CSVs are anonymized. Named export is requestable and gated. **No Bronze load. Do not scrape Virginia court websites.** Details: [`ACCESS_VA_COURT_DATA.md`](ACCESS_VA_COURT_DATA.md).
+Research spike, **not** MVP, **not** employer product, **not** for commercial CRA claims. Independent hobby redistribution (not Commonwealth-affiliated). Public CSVs are anonymized — **do not load** into Bronze. Named export is requestable and gated; **Prasanth will request the account himself.** **No VA loader. Do not scrape Virginia court websites.** Details: [`ACCESS_VA_COURT_DATA.md`](ACCESS_VA_COURT_DATA.md).
+
+## San Francisco — Hugging Face `sf_criminal_court` (research named corpus)
+
+Research spike, **isolated from the WI product path**, **not** employer product, **not** for commercial CRA claims. Third-party HF parquet (`cases.parquet`, ~77k named rows including `defendant_name`). CC-BY-NC-4.0. Published-file download only; **do not scrape** SF court sites. **Do not load Cook County.** Details: [`ACCESS_SF_CRIMINAL_HF.md`](ACCESS_SF_CRIMINAL_HF.md). Loader: `bronze/jobs/load_sf_criminal_hf.py`.
 
 ## Multi-state
 
-Architecture is national-first (`state_code` dimension). Do not add live extractors for other states until product explicitly expands scope.
+Architecture is national-first (`state_code` dimension). Wisconsin WCCA remains the employer MVP extract path. Research sources (`sf_criminal_hf`, gated `va_court_data_org`) do not expand product scope and are not live court scrapes.
