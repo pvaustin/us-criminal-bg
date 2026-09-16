@@ -63,7 +63,7 @@ Prefer this path for `html_ssr_v1` on live WCCA snapshots.
 
 Research-only. Reads `source_system='sf_criminal_hf'` / `state_code='CA'` Bronze JSON and MERGE `court_party` defendant rows. **DELETE is scoped to those keys** so existing `wcca` / `WI` parties are not removed. Does not write `court_case` / `court_charge`. See [`docs/silver/SF_RESEARCH.md`](../../docs/silver/SF_RESEARCH.md).
 
-SQL warehouse: [`silver/transforms/court_party_sf_criminal_hf.sql`](../transforms/court_party_sf_criminal_hf.sql).
+SQL warehouse: [`silver/transforms/court_party_sf_criminal_hf.sql`](../transforms/court_party_sf_criminal_hf.sql). Warehouse apply is statement-at-a-time (`/api/2.0/sql/statements`), so that script uses durable Delta scratch tables (`_sf_party_cases`, `_sf_party_staged`) rather than TEMP VIEW.
 
 ```bash
 python3 silver/transforms/court_party_sf_criminal_hf.py --apply

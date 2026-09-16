@@ -17,6 +17,9 @@
 -- Apply after silver/schemas/court_party.sql.
 -- transform_run_id is materialized once into _this_transform_run (same
 -- scratch pattern as silver/transforms/court_case.sql).
+-- Warehouse /api/2.0/sql/statements is statement-at-a-time: TEMP VIEW does
+-- not persist across calls. Stage cases/parties in durable Delta scratch
+-- tables (_sf_party_cases, _sf_party_staged) and DROP them at end.
 
 CREATE CATALOG IF NOT EXISTS us_criminal_bg;
 CREATE SCHEMA IF NOT EXISTS us_criminal_bg.silver;
@@ -62,7 +65,9 @@ FROM us_criminal_bg.silver._this_transform_run;
 
 -- Current SF/CA Bronze keys in this run (including blank-name cases).
 -- Used so stale SF party rows can be deleted without touching wcca/WI.
-CREATE OR REPLACE TEMP VIEW silver_court_party_sf_cases AS
+CREATE OR REPLACE TABLE us_criminal_bg.silver._sf_party_cases
+USING DELTA
+AS
 SELECT
   r.source_system,
   r.state_code,
@@ -99,7 +104,9 @@ FROM (
 ) r
 WHERE r.rn = 1;
 
-CREATE OR REPLACE TEMP VIEW silver_court_party_sf_staged AS
+CREATE OR REPLACE TABLE us_criminal_bg.silver._sf_party_staged
+USING DELTA
+AS
 WITH named AS (
   SELECT
     c.source_system,
@@ -119,7 +126,7 @@ WITH named AS (
       ),
       ''
     ) AS raw_name
-  FROM silver_court_party_sf_cases c
+  FROM us_criminal_bg.silver._sf_party_cases c
 ),
 tokenized AS (
   SELECT
@@ -228,7 +235,7 @@ WHERE p.source_system = 'sf_criminal_hf'
   AND p.state_code = 'CA';
 
 MERGE INTO us_criminal_bg.silver.court_party AS t
-USING silver_court_party_sf_staged AS s
+USING us_criminal_bg.silver._sf_party_staged AS s
 ON t.source_system = s.source_system
  AND t.state_code = s.state_code
  AND t.source_record_id = s.source_record_id
@@ -303,13 +310,13 @@ DELETE FROM us_criminal_bg.silver.court_party t
 WHERE t.source_system = 'sf_criminal_hf'
   AND t.state_code = 'CA'
   AND EXISTS (
-    SELECT 1 FROM silver_court_party_sf_cases s
+    SELECT 1 FROM us_criminal_bg.silver._sf_party_cases s
     WHERE t.source_system = s.source_system
       AND t.state_code = s.state_code
       AND t.source_record_id = s.source_record_id
   )
   AND NOT EXISTS (
-    SELECT 1 FROM silver_court_party_sf_staged p
+    SELECT 1 FROM us_criminal_bg.silver._sf_party_staged p
     WHERE t.source_system = p.source_system
       AND t.state_code = p.state_code
       AND t.source_record_id = p.source_record_id
@@ -331,4 +338,6 @@ WHERE t.status = 'running'
     SELECT transform_run_id FROM us_criminal_bg.silver._this_transform_run
   );
 
+DROP TABLE IF EXISTS us_criminal_bg.silver._sf_party_cases;
+DROP TABLE IF EXISTS us_criminal_bg.silver._sf_party_staged;
 DROP TABLE IF EXISTS us_criminal_bg.silver._this_transform_run;

@@ -140,6 +140,15 @@ class TransformScopeTests(unittest.TestCase):
         self.assertIn("t.state_code = 'CA'", delete_block)
         # Must not delete by case key alone (that would wipe wcca on collision).
         self.assertNotIn("DELETE FROM us_criminal_bg.silver.court_party t\nWHERE EXISTS", sql)
+        # Warehouse SQL API is statement-at-a-time: scratch tables, not TEMP VIEW.
+        self.assertNotIn("CREATE OR REPLACE TEMP VIEW", sql)
+        self.assertIn("CREATE OR REPLACE TABLE us_criminal_bg.silver._sf_party_cases", sql)
+        self.assertIn("CREATE OR REPLACE TABLE us_criminal_bg.silver._sf_party_staged", sql)
+        self.assertIn("USING us_criminal_bg.silver._sf_party_staged AS s", sql)
+        self.assertIn("FROM us_criminal_bg.silver._sf_party_cases s", sql)
+        self.assertIn("FROM us_criminal_bg.silver._sf_party_staged p", sql)
+        self.assertIn("DROP TABLE IF EXISTS us_criminal_bg.silver._sf_party_cases", sql)
+        self.assertIn("DROP TABLE IF EXISTS us_criminal_bg.silver._sf_party_staged", sql)
 
     def test_python_job_constants_are_sf_only(self) -> None:
         self.assertEqual(SF_SOURCE_SYSTEM_SQL, "sf_criminal_hf")
