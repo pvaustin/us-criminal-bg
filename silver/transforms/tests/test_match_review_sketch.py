@@ -22,6 +22,7 @@ SYNTHETIC_PARTY = {
     "source_record_id": "01:2099CF000010",
     "ingest_run_id": "synthetic-ingest",
     "payload_sha256": "abc123",
+    "transform_run_id": "synthetic-transform",
     "party_role": "defendant",
     "party_ordinal": 1,
     "raw_name": "FIXTURE, JANE Q",
@@ -48,9 +49,14 @@ class MatchReviewSketchTests(unittest.TestCase):
         self.assertEqual(prov["source_record_id"], "01:2099CF000010")
         self.assertEqual(prov["ingest_run_id"], "synthetic-ingest")
         self.assertEqual(prov["payload_sha256"], "abc123")
+        self.assertEqual(prov["transform_run_id"], "synthetic-transform")
         self.assertEqual(prov["party_role"], "defendant")
         self.assertEqual(prov["party_ordinal"], 1)
         self.assertEqual(prov["band"], "auto")
+        self.assertEqual(prov["confidence_band"], "auto")
+        self.assertEqual(prov["party_key"], "wcca|WI|01:2099CF000010|defendant|1")
+        self.assertEqual(prov["case_report_key"], "wcca|WI|01:2099CF000010")
+        self.assertIn("dob_match", prov["score_or_reason_codes"])
 
     def test_review_when_dob_missing(self) -> None:
         party = dict(SYNTHETIC_PARTY)
@@ -110,6 +116,26 @@ class MatchReviewSketchTests(unittest.TestCase):
         )
         self.assertEqual(sketch.band, "no-link")
         self.assertIn("last_name_mismatch", sketch.reasons)
+
+    def test_missing_dob_on_one_side_is_review_not_fail(self) -> None:
+        party = dict(SYNTHETIC_PARTY)
+        party["dob"] = None
+        sketch = score_subject_against_party(
+            {"name": "Jane Fixture", "dob": date(2099, 1, 15)},
+            party,
+        )
+        self.assertEqual(sketch.band, "review")
+        self.assertIn("dob_absent", sketch.reasons)
+        self.assertNotIn("dob_conflict", sketch.reasons)
+
+    def test_first_initial_with_dob_is_review_not_auto(self) -> None:
+        sketch = score_subject_against_party(
+            {"name": "J Fixture", "dob": date(2099, 1, 15)},
+            SYNTHETIC_PARTY,
+        )
+        self.assertEqual(sketch.band, "review")
+        self.assertIn("first_initial_match", sketch.reasons)
+        self.assertIn("dob_match", sketch.reasons)
 
 
 if __name__ == "__main__":

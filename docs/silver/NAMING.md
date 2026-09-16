@@ -7,7 +7,7 @@
 
 This doc is the durable contract for Silver identifiers and transforms. It **mirrors** Bronze national-first principles: state is a **dimension / module**, never the top-level product prefix. Silver **reads** Bronze; it never writes Bronze.
 
-HTML snapshot parseability (what SSR text can and cannot fill) is documented in [`docs/silver/WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md). Match/review (employer subject vs `court_party`) is a **design sketch** in [`docs/silver/MATCH_REVIEW.md`](MATCH_REVIEW.md) — not a Silver table and not a hire/FCRA output.
+HTML snapshot parseability (what SSR text can and cannot fill) is documented in [`docs/silver/WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md). Match/review (employer subject vs `court_party`) is a **design sketch** in [`docs/silver/MATCH_REVIEW.md`](MATCH_REVIEW.md): **no silent auto-link**, MVP default **review** / **no-link**, later append-only `us_criminal_bg.silver.match_decision` (not created here). Not a hire/FCRA output.
 
 ## Principles
 
@@ -37,7 +37,7 @@ Do **not** create `wi_*` catalogs/schemas. Wisconsin appears only as `state_code
 | `us_criminal_bg.silver.court_party` | One **current** party row per role + ordinal (defendant / plaintiff / aka / other) |
 | `us_criminal_bg.silver.transform_run` | One row per Silver transform **attempt** (success or failure) |
 
-Person **match scores** remain out of scope for Silver tables. `court_party` is source-extracted party facts for later review UI, not a match graph. Race is **omitted** from this table (WCCA often labels it; it is agency-provided and subjective; matching must not require it).
+Person **match scores** are not type-1 fact tables. `court_party` is source-extracted party facts. Later human/suggestion decisions belong in append-only `us_criminal_bg.silver.match_decision` (named in `MATCH_REVIEW.md`; **not** created in this version). Race is **omitted** from `court_party` (agency-provided subjective; matching must not require it).
 
 ## Natural keys and SCD
 
@@ -229,7 +229,7 @@ silver/
 
 ## Out of scope (do not put in Silver)
 
-- Person match **tables**, hire/no-hire, FCRA adverse-action packages, Gold marts (review-queue **design** lives in `MATCH_REVIEW.md` and must not be treated as a hiring engine)
+- Person match **scoring jobs**, hire/no-hire, FCRA adverse-action packages, Gold marts (review-queue **design** + named append store `match_decision` live in `MATCH_REVIEW.md`; must not be treated as a hiring engine; `match_decision` is **not** created in this version)
 - Invented or hallucinated court records; county-name lookup tables that can be wrong
 - Secrets, PATs, cookies, CAPTCHA tokens in git or chat
 - Scraping WCCA or mutating Bronze
@@ -241,6 +241,7 @@ Bump `silver_schema_version` when Silver columns or parse-status/flag vocabulari
 
 ### Changelog
 
+- `2026-09-16` — Match/review AC1: no silent auto-link; `dob_absent` → review; named `match_decision` append store (doc only).
 - `2026-09-16` — `silver.court_party.v1`: HTML SSR plaintiff / defendant / aka; labeled DOB/sex/address only; race omitted.
 - `2026-09-16` — `silver.court_case.v2` + `silver.court_charge.v1`: HTML SSR parser for caption / filed_date / case_status / county_name / charges; statuses `html_ssr_v1` and `html_ssr_partial`.
 - `2026-09-15` — Initial national-first Silver contract (MVP: `court_case` + `transform_run`, WCCA identifiers).

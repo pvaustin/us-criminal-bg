@@ -1,8 +1,7 @@
 """Design-sketch scorer for docs/silver/MATCH_REVIEW.md.
 
-Not a Databricks job. Not a hire/FCRA decision. Synthetic names only.
-Uma can call the same helpers in UI unit tests; warehouse matching is out of
-scope for Silver.
+Not a Databricks job. Not silent auto-link. Not a hire/FCRA decision.
+Synthetic names only. Uma can call the same helpers in UI unit tests.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ from typing import Any, Mapping
 from sources.wcca.parse import split_person_name
 
 MATCHABLE_ROLES = frozenset({"defendant", "aka"})
-AUTO_MIN = 90
 REVIEW_MIN = 50
 
 
@@ -90,12 +88,49 @@ def parse_subject_name(
     return tokens[-1], tokens[0], " ".join(tokens[1:-1])
 
 
-def _band_for(score: int, *, blocked: bool) -> str:
-    if blocked or score < REVIEW_MIN:
-        return "no-link"
-    if score >= AUTO_MIN:
-        return "auto"
-    return "review"
+def party_key(party: Mapping[str, Any], *, role: str = "", ordinal: int = 0) -> str:
+    """`source_system|state_code|source_record_id|party_role|party_ordinal`."""
+    return "|".join(
+        [
+            str(party.get("source_system") or ""),
+            str(party.get("state_code") or ""),
+            str(party.get("source_record_id") or ""),
+            str(party.get("party_role") or role or ""),
+            str(party.get("party_ordinal") if party.get("party_ordinal") is not None else ordinal),
+        ]
+    )
+
+
+def case_report_key(party: Mapping[str, Any]) -> str:
+    """Existing court_case natural key — no new report grain."""
+    return "|".join(
+        [
+            str(party.get("source_system") or ""),
+            str(party.get("state_code") or ""),
+            str(party.get("source_record_id") or ""),
+        ]
+    )
+
+
+def _exact_name_match(
+    *,
+    n_subj_last: str | None,
+    n_party_last: str | None,
+    n_subj_first: str | None,
+    n_party_first: str | None,
+    n_subj_raw: str | None,
+    n_party_raw: str | None,
+) -> bool:
+    last_first = bool(
+        n_subj_last
+        and n_party_last
+        and n_subj_last == n_party_last
+        and n_subj_first
+        and n_party_first
+        and n_subj_first == n_party_first
+    )
+    raw = bool(n_subj_raw and n_party_raw and n_subj_raw == n_party_raw)
+    return last_first or raw
 
 
 def score_subject_against_party(
@@ -104,9 +139,9 @@ def score_subject_against_party(
 ) -> MatchSketch:
     """Score one employer subject against one court_party row.
 
-    Signals: normalized last/first (or first initial) and optional DOB.
-    Non-signals: race (not on the table), sex, address. Plaintiff is never
-    matchable. A DOB conflict is always no-link.
+    MVP: no silent auto-link. `auto` only when exact last+first (or exact
+    raw_name) and both DOBs present and equal — suggestion only.
+    Missing DOB → `dob_absent` → review; never invent a date.
     """
     role = str(party.get("party_role") or "")
     ordinal = int(party.get("party_ordinal") or 0)
@@ -132,6 +167,8 @@ def score_subject_against_party(
     n_party_last = _norm_token(party_last)
     n_subj_first = _norm_token(subj_first)
     n_party_first = _norm_token(party_first)
+    n_subj_raw = _norm_token(_collapse(subject.get("name")))
+    n_party_raw = _norm_token(raw_name)
 
     if not n_subj_last or not n_party_last:
         reasons.append("last_name_unparsed")
@@ -155,6 +192,9 @@ def score_subject_against_party(
     elif n_subj_first or n_party_first:
         reasons.append("first_name_unparsed")
 
+    if n_subj_raw and n_party_raw and n_subj_raw == n_party_raw:
+        reasons.append("raw_name_match")
+
     subj_dob = _parse_dob(subject.get("dob"))
     party_dob = _parse_dob(party.get("dob"))
     if subj_dob and party_dob:
@@ -164,15 +204,29 @@ def score_subject_against_party(
         else:
             reasons.append("dob_conflict")
             blocked = True
-    elif subj_dob or party_dob:
-        reasons.append("dob_unilateral")
     else:
         reasons.append("dob_absent")
 
     if role == "aka":
         reasons.append("aka_alias_row")
 
-    band = _band_for(score, blocked=blocked)
+    exact_name = _exact_name_match(
+        n_subj_last=n_subj_last,
+        n_party_last=n_party_last,
+        n_subj_first=n_subj_first,
+        n_party_first=n_party_first,
+        n_subj_raw=n_subj_raw,
+        n_party_raw=n_party_raw,
+    )
+    if blocked:
+        band = "no-link"
+    elif exact_name and "dob_match" in reasons:
+        band = "auto"
+    elif score >= REVIEW_MIN:
+        band = "review"
+    else:
+        band = "no-link"
+
     return MatchSketch(
         band=band,
         score=0 if blocked else score,
@@ -184,15 +238,26 @@ def score_subject_against_party(
 
 
 def required_provenance(party: Mapping[str, Any], sketch: MatchSketch) -> dict[str, Any]:
-    """Fields every review card must carry (no hire decision payload)."""
+    """Minimum review-queue field contract (no hire decision payload)."""
+    role = sketch.party_role
+    ordinal = sketch.party_ordinal
     return {
+        "party_key": party_key(party, role=role, ordinal=ordinal),
+        "party_role": role,
+        "party_ordinal": ordinal,
+        "raw_name": sketch.raw_name,
+        "name_last": party.get("name_last"),
+        "name_first": party.get("name_first"),
+        "name_middle": party.get("name_middle"),
+        "confidence_band": sketch.band,
+        "score_or_reason_codes": [str(sketch.score), *sketch.reasons],
         "source_system": party.get("source_system"),
         "state_code": party.get("state_code"),
         "source_record_id": party.get("source_record_id"),
         "ingest_run_id": party.get("ingest_run_id"),
         "payload_sha256": party.get("payload_sha256"),
-        "party_role": sketch.party_role,
-        "party_ordinal": sketch.party_ordinal,
+        "transform_run_id": party.get("transform_run_id"),
+        "case_report_key": case_report_key(party),
         "score": sketch.score,
         "band": sketch.band,
         "reasons": list(sketch.reasons),

@@ -70,4 +70,4 @@ Business attributes for a given Bronze key converge; `transformed_at` / `transfo
 
 ## Out of scope
 
-Person matching as a hire engine, FCRA, Gold, scraping WCCA, writing Bronze. Review-queue **design** is [`docs/silver/MATCH_REVIEW.md`](../../docs/silver/MATCH_REVIEW.md).
+Person matching as a hire engine, FCRA, Gold, scraping WCCA, writing Bronze. Review-queue **design** (no silent auto-link; later `match_decision` append store) is [`docs/silver/MATCH_REVIEW.md`](../../docs/silver/MATCH_REVIEW.md).
