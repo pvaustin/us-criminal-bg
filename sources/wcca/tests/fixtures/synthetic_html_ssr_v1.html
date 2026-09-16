@@ -1,0 +1,62 @@
+<!--
+  SYNTHETIC FIXTURE — NOT A REAL COURT RECORD.
+  Shape of a WCCA HTML snapshot with server-rendered case text
+  (title, caption, filing date, status, charges + modifier).
+  Names, dates, statutes, and county are invented for tests.
+-->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>2099CF000001 Case Details in Fixture County</title>
+    <style type="text/css">
+      .hidden { color: red; }
+    </style>
+    <script>
+      /* Must not be parsed as SSR facts */
+      var ignore = "State of Wisconsin vs. SCRIPT BUNDLE NAME";
+    </script>
+  </head>
+  <body>
+    <h1>2099CF000001 Case Details in Fixture County</h1>
+    <h2>State of Wisconsin vs. FIXTURE, JANE Q</h2>
+    <div>
+      <div>Filing date</div>
+      <div>01-02-2099</div>
+      <div>Case type</div>
+      <div>Criminal</div>
+      <div>Case status</div>
+      <div>Open</div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Count no.</th>
+          <th>Statute</th>
+          <th>Description</th>
+          <th>Severity</th>
+          <th>Disposition</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td>999.01(1)</td>
+          <td>Synthetic offense one</td>
+          <td>Felony</td>
+          <td></td>
+        </tr>
+        <tr>
+          <td colspan="5">Modifier: 999.05 Synthetic party modifier</td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>999.02</td>
+          <td>Synthetic offense two</td>
+          <td>Misdemeanor A</td>
+          <td></td>
+        </tr>
+      </tbody>
+    </table>
+  </body>
+</html>

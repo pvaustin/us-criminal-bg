@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS us_criminal_bg.silver.court_case (
   case_type STRING,
   filed_date DATE,
   caption STRING,
+  case_status STRING,
+  county_name STRING,
   payload_parse_status STRING NOT NULL,
   -- Databricks SQL requires an ARRAY element type (ARRAY<STRING>, not bare ARRAY).
   dq_flags ARRAY<STRING> NOT NULL,
@@ -45,3 +47,43 @@ CREATE TABLE IF NOT EXISTS us_criminal_bg.silver.court_case (
   transformed_at TIMESTAMP NOT NULL,
   transform_run_id STRING NOT NULL
 ) USING DELTA;
+
+-- Existing v1 tables from PR #3 need case_status / county_name.
+-- This warehouse rejects `ADD COLUMN IF NOT EXISTS` (PARSE_SYNTAX_ERROR near EXISTS).
+-- Guard with information_schema; skip when the column already exists.
+-- If compound IF is unavailable, run the preview SELECT below and execute only
+-- the missing `ALTER TABLE ... ADD COLUMN <name> STRING;` statements (plain ADD
+-- COLUMN, no IF NOT EXISTS). Duplicate-column errors mean the column is present.
+
+SELECT requested.column_name AS missing_court_case_column
+FROM (
+  SELECT 'case_status' AS column_name
+  UNION ALL
+  SELECT 'county_name'
+) requested
+LEFT JOIN us_criminal_bg.information_schema.columns c
+  ON lower(c.table_schema) = 'silver'
+ AND lower(c.table_name) = 'court_case'
+ AND lower(c.column_name) = requested.column_name
+WHERE c.column_name IS NULL;
+
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM us_criminal_bg.information_schema.columns
+    WHERE lower(table_schema) = 'silver'
+      AND lower(table_name) = 'court_case'
+      AND lower(column_name) = 'case_status'
+  ) THEN
+    ALTER TABLE us_criminal_bg.silver.court_case ADD COLUMN case_status STRING;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM us_criminal_bg.information_schema.columns
+    WHERE lower(table_schema) = 'silver'
+      AND lower(table_name) = 'court_case'
+      AND lower(column_name) = 'county_name'
+  ) THEN
+    ALTER TABLE us_criminal_bg.silver.court_case ADD COLUMN county_name STRING;
+  END IF;
+END;
