@@ -6,7 +6,7 @@
 **DDL:** [`silver/schemas/court_party.sql`](../../silver/schemas/court_party.sql)  
 **Parsers:** [`sources/wcca/parse.py`](../../sources/wcca/parse.py) (`parse_parties_from_ssr_text`) · [`sources/sf_criminal_hf/parse_party.py`](../../sources/sf_criminal_hf/parse_party.py) (research JSON defendants)  
 **Transforms:** WCCA — [`silver/transforms/court_case.sql`](../../silver/transforms/court_case.sql) / [`court_case.py`](../../silver/transforms/court_case.py). SF research (parallel, does not delete WI) — [`silver/transforms/court_party_sf_criminal_hf.sql`](../../silver/transforms/court_party_sf_criminal_hf.sql) / [`court_party_sf_criminal_hf.py`](../../silver/transforms/court_party_sf_criminal_hf.py)  
-**Contracts:** [`NAMING.md`](NAMING.md) · [`WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md) · [`MATCH_REVIEW.md`](MATCH_REVIEW.md) · [`SF_RESEARCH.md`](SF_RESEARCH.md)
+**Contracts:** [`NAMING.md`](NAMING.md) · [`WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md) · [`MATCH_REVIEW.md`](MATCH_REVIEW.md) · [`SF_RESEARCH.md`](SF_RESEARCH.md) · [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md)
 
 Analytics-ready **party facts** extracted from already-landed Bronze (WCCA `html_snapshot` HTML, plus a research-only SF HF JSON path). Type-1 current row. Not a person graph, not a hire decision.
 
@@ -24,7 +24,7 @@ Analytics-ready **party facts** extracted from already-landed Bronze (WCCA `html
 | Scrape / HTTP to WCCA | Transforms consume Bronze only |
 | Bronze writes | No INSERT/UPDATE/DELETE on `us_criminal_bg.bronze.*` |
 | Silent auto-link | Matching is a review-queue design (`MATCH_REVIEW.md`), not this table |
-| `match_decision` table | Named in MATCH_REVIEW; **not created** |
+| Hire / no-hire, FCRA packages, Gold | Silver facts only |
 
 ## Schema
 
@@ -149,7 +149,7 @@ Synthetic fixtures under `sources/wcca/tests/fixtures/` are **not** this live gr
 
 ## How `MATCH_REVIEW.md` consumes `court_party`
 
-Sketch helper: [`silver/transforms/match_review_sketch.py`](../../silver/transforms/match_review_sketch.py) (pure Python, synthetic examples — **not** a Databricks scoring job).
+Sketch helper: [`silver/transforms/match_review_sketch.py`](../../silver/transforms/match_review_sketch.py) (pure Python, synthetic examples). SF name-only warehouse job (same bands, last-name retrieve, append `match_decision`): [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md). **No silent auto-link.**
 
 1. Filter to `party_role IN ('defendant', 'aka')` before scoring. Plaintiff (`State of Wisconsin`) and `other` are **no-link** (`party_role_not_matchable`).
 2. Score one employer subject against **one** `court_party` row. AKA is a separate card (`aka_alias_row`).
@@ -182,13 +182,13 @@ Attach using **existing** case/charge keys only. **No new report identity grain*
 
 Example: `wcca|WI|51:2026CF000028` → case + charges; party cards keep their own `party_key`.
 
-Later human/suggestion rows belong in append-only `us_criminal_bg.silver.match_decision` (sketched in MATCH_REVIEW; **not created**).
+Later human/suggestion rows belong in append-only `us_criminal_bg.silver.match_decision` ([`MATCH_REVIEW.md`](MATCH_REVIEW.md); SF experiment: [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md)).
 
 ## Open follow-ups
 
 | Item | Status |
 |------|--------|
-| Create `us_criminal_bg.silver.match_decision` | Named + column sketch in [`MATCH_REVIEW.md`](MATCH_REVIEW.md). Append-only. **Not created.** Coordinator may add later; do not treat a UI-only store as the system of record |
+| Create `us_criminal_bg.silver.match_decision` | DDL + SF research job in [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md). Append-only. Warehouse apply coordinator-side. Not a hire engine |
 | Charge `modifier_*` on the SQL path | Python fills `modifier_statute` / `modifier_text` from `Modifier:` lines. [`court_case.sql`](../../silver/transforms/court_case.sql) leaves them **null** |
 | SF HF research parties | Dedicated transform [`court_party_sf_criminal_hf.sql`](../../silver/transforms/court_party_sf_criminal_hf.sql). Gaps / experiment-only: [`SF_RESEARCH.md`](SF_RESEARCH.md). Warehouse apply coordinator-side |
 | SQL vs Python party DQ | SQL comma-splits name parts and uses a `Last,` lookahead for aka. Prefer Python for aka header collapse, trailing-`Also` strip, and `dob_unparsed` |

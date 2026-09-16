@@ -12,9 +12,10 @@ From the repo root:
 python3 -m unittest discover -s sources/wcca/tests -v
 python3 -m unittest discover -s sources/sf_criminal_hf/tests -v
 python3 -m unittest discover -s silver/transforms/tests -v
-python3 -m py_compile sources/wcca/parse.py sources/sf_criminal_hf/parse_party.py silver/transforms/map_court_case.py silver/transforms/map_court_party_sf.py silver/transforms/court_case.py silver/transforms/court_party_sf_criminal_hf.py silver/transforms/match_review_sketch.py
+python3 -m py_compile sources/wcca/parse.py sources/sf_criminal_hf/parse_party.py silver/transforms/map_court_case.py silver/transforms/map_court_party_sf.py silver/transforms/court_case.py silver/transforms/court_party_sf_criminal_hf.py silver/transforms/match_review_sketch.py silver/transforms/match_decision_sf_research.py
 python3 silver/transforms/court_case.py --help
 python3 silver/transforms/court_party_sf_criminal_hf.py --help
+python3 silver/transforms/match_decision_sf_research.py --help
 ```
 
 Synthetic HTML under `sources/wcca/tests/fixtures/` is **not** a real court record.
@@ -28,6 +29,7 @@ Operator-only. The cloud agent that added this tree does **not** apply Silver DD
 3. Run [`silver/schemas/court_charge.sql`](../schemas/court_charge.sql).
 4. Run [`silver/schemas/court_party.sql`](../schemas/court_party.sql).
 5. Confirm `us_criminal_bg.silver.court_case`, `us_criminal_bg.silver.court_charge`, `us_criminal_bg.silver.court_party`, and `us_criminal_bg.silver.transform_run` exist.
+6. For the SF name-only experiment, run [`silver/schemas/match_decision.sql`](../schemas/match_decision.sql). Confirm `us_criminal_bg.silver.match_decision` exists. See [`docs/silver/SF_MATCH_EXPERIMENT.md`](../../docs/silver/SF_MATCH_EXPERIMENT.md).
 
 Non-secret workspace notes (same as Bronze): host `dbc-a0dcbe75-2647.cloud.databricks.com`, workspace id `7474648418210162`. Auth stays in the Databricks CLI profile / workspace — never commit `.databrickscfg` or tokens.
 
@@ -71,6 +73,16 @@ python3 silver/transforms/court_party_sf_criminal_hf.py --apply
 
 Do **not** use the WCCA `court_case.sql` / `court_case.py` job to refresh SF parties (that job still ranks all Bronze sources and could delete SF keys as `unsupported_source`).
 
+### D. SF name-only match suggestions (research; does not touch WI)
+
+Research-only. Scores a **small** subject table against `court_party` where `source_system='sf_criminal_hf'` / `state_code='CA'`, joining on **normalized last name** (not a 77k cartesian). APPENDS `actor='system:suggestion'` rows to `match_decision`. SF parties have no DOB → **`review` / `dob_absent`, never `auto`**. Not CRA / adverse action. See [`docs/silver/SF_MATCH_EXPERIMENT.md`](../../docs/silver/SF_MATCH_EXPERIMENT.md).
+
+SQL warehouse: [`silver/transforms/match_decision_sf_research.sql`](../transforms/match_decision_sf_research.sql). Coordinator loads N subjects into `us_criminal_bg.silver._match_subject_sf_research` first.
+
+```bash
+python3 silver/transforms/match_decision_sf_research.py --apply
+```
+
 ## Idempotency
 
 | Table | Re-run behavior |
@@ -79,9 +91,10 @@ Do **not** use the WCCA `court_case.sql` / `court_case.py` job to refresh SF par
 | `silver.court_charge` | Upsert on `(source_system, state_code, source_record_id, charge_count)`; extra counts for processed cases are deleted |
 | `silver.court_party` | Upsert on `(source_system, state_code, source_record_id, party_role, party_ordinal)`; extra role+ordinals for processed cases are deleted |
 | `silver.transform_run` | Always append a new attempt row |
+| `silver.match_decision` | Always append (suggestion or human). Never MERGE / UPDATE / DELETE |
 
 Business attributes for a given Bronze key converge; `transformed_at` / `transform_run_id` change each run (type-1 current row metadata).
 
 ## Out of scope
 
-Person matching as a hire engine, FCRA, Gold, scraping WCCA, writing Bronze. Review-queue **design** (no silent auto-link; later `match_decision` append store) is [`docs/silver/MATCH_REVIEW.md`](../../docs/silver/MATCH_REVIEW.md).
+Person matching as a hire engine, FCRA, Gold, scraping WCCA, writing Bronze. Review-queue bands (no silent auto-link) are [`docs/silver/MATCH_REVIEW.md`](../../docs/silver/MATCH_REVIEW.md). SF name-only research job: [`docs/silver/SF_MATCH_EXPERIMENT.md`](../../docs/silver/SF_MATCH_EXPERIMENT.md).

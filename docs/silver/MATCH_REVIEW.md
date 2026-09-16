@@ -2,14 +2,15 @@
 
 **Owner:** silva silver (facts) / Uma (review UI)  
 **Silver facts:** `us_criminal_bg.silver.court_party`  
-**Later decisions (named store):** `us_criminal_bg.silver.match_decision` (append-only; **not created in this PR**)  
-**Sketch helper:** `silver/transforms/match_review_sketch.py` (pure Python, synthetic examples only — **not** a Databricks scoring job, **not** silent auto-link)
+**Decisions (named store):** `us_criminal_bg.silver.match_decision` (append-only; DDL [`silver/schemas/match_decision.sql`](../../silver/schemas/match_decision.sql))  
+**Sketch helper:** `silver/transforms/match_review_sketch.py` (pure Python, synthetic examples — **not** silent auto-link)  
+**SF research job:** [`docs/silver/SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md) — name-only scoring of sample subjects against `sf_criminal_hf` / `CA` defendants; still not a hire engine
 
 This is a design sketch so Uma can build a review queue against party facts Silver already stores. It does **not** scrape, does **not** write Bronze, does **not** write Gold, and does **not** produce a hire / FCRA adverse-action output.
 
 AKA rows are **one person-name each** (`Last, First[ M]`); `address_raw` stops at ZIP / before Branch ID. See `docs/silver/WCCA_HTML_SSR.md`.
 
-SF HF research defendants (`source_system=sf_criminal_hf`, `state_code=CA`) may appear on the same `court_party` table for **name-match experiments**. They always lack DOB (`dob_absent` → **review**). That corpus is **not** the WI employer product path — see [`SF_RESEARCH.md`](SF_RESEARCH.md). Do not treat an SF experiment hit as a hire signal.
+SF HF research defendants (`source_system=sf_criminal_hf`, `state_code=CA`) may appear on the same `court_party` table for **name-match experiments**. They always lack DOB (`dob_absent` → **review**, **never `auto`**). That corpus is **not** the WI employer product path — see [`SF_RESEARCH.md`](SF_RESEARCH.md) and [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md). Do not treat an SF experiment hit as a hire signal.
 
 ## Subject inputs
 
@@ -79,12 +80,12 @@ Attach using **existing** case/charge keys only:
 
 ## MVP store: `us_criminal_bg.silver.match_decision`
 
-Prefer a Databricks append-only table over a web-app-only store. **Not implemented in this PR** (coordinator may add later). Sketch:
+Prefer a Databricks append-only table over a web-app-only store. **DDL is in this PR** ([`silver/schemas/match_decision.sql`](../../silver/schemas/match_decision.sql)); warehouse apply is coordinator-side. Extra Uma contract columns (`raw_name`, name parts, `score`, `reasons`, `case_report_key`, `review_status`, `experiment_tag`) are documented in [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md).
 
 ```text
 us_criminal_bg.silver.match_decision
   decision_id            STRING NOT NULL   -- uuid per append
-  subject_ref            STRING NOT NULL   -- employer subject id (not a court person id)
+  subject_ref            STRING NOT NULL   -- employer / research subject id (not a court person id)
   subject_name           STRING            -- as submitted; do not invent
   subject_dob            DATE              -- null when absent (honest)
   party_key              STRING NOT NULL   -- source_system|state_code|source_record_id|party_role|party_ordinal
@@ -102,7 +103,7 @@ us_criminal_bg.silver.match_decision
   actor                  STRING NOT NULL   -- e.g. reviewer email, or system:suggestion
 ```
 
-Always **append**. Never type-1 overwrite a human decision. `auto` rows are `actor = system:suggestion` and are not employment actions.
+Always **append**. Never type-1 overwrite a human decision. `auto` rows are `actor = system:suggestion` and are not employment actions. SF research suggestions also set `review_status='suggestion'` and `experiment_tag='sf_name_only_research'`.
 
 ### Evidence persisted per band
 
@@ -119,7 +120,7 @@ Always **append**. Never type-1 overwrite a human decision. `auto` rows are `act
 - No FCRA adverse-action copy, notices, or packages
 - No automatic adverse action
 - No bulk WCCA scrape, no weekly ingest, no Bronze writes
-- No warehouse scoring job in this version
+- No WI employer scoring job (SF **research** last-name job is isolated: [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md); not CRA / adverse action)
 - No new report identity grain
 - Matching must not require race (column omitted from `court_party`)
 
@@ -135,6 +136,7 @@ Names below are **fixtures**, not live defendants.
 | Jane Fixture | plaintiff `State of Wisconsin` | **no-link** | `party_role_not_matchable` |
 | Jane Aliasfixture | aka `ALIASFIXTURE, JANE` (no DOB) | **review** | alias row, `dob_absent` |
 | J Fixture, DOB 2099-01-15 | defendant `FIXTURE, JANE Q`, DOB 2099-01-15 | **review** | first-initial only — not the auto rule |
+| Jane Q Public (no DOB) | SF defendant `JANE Q PUBLIC`, DOB null | **review** | name match, `dob_absent` — SF **never `auto`** |
 
 Live Bronze grain `source_system=wcca`, `state_code=WI`, `source_record_id=51:2026CF000028` is expected to yield **plaintiff 1**, **defendant 1**, **aka N≥1** (clean person names). Do not copy live names, DOB, or address into git or into this doc.
 
@@ -144,5 +146,5 @@ Live Bronze grain `source_system=wcca`, `state_code=WI`, `source_record_id=51:20
 2. One subject can produce several cards (defendant + each aka). Keep `party_key` per card.
 3. **MVP: show the queue.** `auto` may collapse/sort; it must not skip human confirmation or attach the report.
 4. Case report route uses **`case_report_key`** only (existing `court_case` / `court_charge` keys).
-5. Persist later decisions to `us_criminal_bg.silver.match_decision` (append), not a UI-only store.
-6. Warehouse apply of `court_party` is coordinator-side; `match_decision` DDL is **not** in this PR.
+5. Persist later decisions to `us_criminal_bg.silver.match_decision` (append), not a UI-only store. Uma contract (subject, candidates[], score, band, `decision_id`, `review_status`): [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md).
+6. Warehouse apply of `court_party` and `match_decision` DDL is coordinator-side. SF name-only experiment job is research-only and must not mix into WI employer product claims.

@@ -12,8 +12,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from silver.transforms.match_review_sketch import (  # noqa: E402
+    UMA_CONTRACT_FIELDS,
+    match_decision_row,
+    retrieve_candidates_by_last_name,
     required_provenance,
     score_subject_against_party,
+    suggestion_rows_for_subject,
 )
 
 SYNTHETIC_PARTY = {
@@ -136,6 +140,54 @@ class MatchReviewSketchTests(unittest.TestCase):
         self.assertEqual(sketch.band, "review")
         self.assertIn("first_initial_match", sketch.reasons)
         self.assertIn("dob_match", sketch.reasons)
+
+    def test_first_last_subject_parses_against_comma_party(self) -> None:
+        sketch = score_subject_against_party(
+            {"name": "Jane Q Fixture", "dob": "2099-01-15"},
+            SYNTHETIC_PARTY,
+        )
+        self.assertEqual(sketch.band, "auto")
+        self.assertIn("last_name_match", sketch.reasons)
+        self.assertIn("first_name_match", sketch.reasons)
+
+    def test_last_name_retrieval_is_not_cartesian(self) -> None:
+        other = {
+            **SYNTHETIC_PARTY,
+            "source_record_id": "01:2099CF000011",
+            "raw_name": "OTHERPERSON, JANE",
+            "name_last": "OTHERPERSON",
+            "name_first": "JANE",
+        }
+        hits = retrieve_candidates_by_last_name(
+            {"name": "Jane Fixture"},
+            [SYNTHETIC_PARTY, other],
+        )
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["name_last"], "FIXTURE")
+
+    def test_suggestion_row_carries_uma_contract_fields(self) -> None:
+        sketch = score_subject_against_party(
+            {"name": "Jane Q Fixture", "dob": "2099-01-15"},
+            SYNTHETIC_PARTY,
+        )
+        row = match_decision_row(
+            {"subject_ref": "synthetic-subject-1", "name": "Jane Q Fixture", "dob": "2099-01-15"},
+            SYNTHETIC_PARTY,
+            sketch,
+        )
+        for field in UMA_CONTRACT_FIELDS:
+            self.assertIn(field, row)
+        self.assertEqual(row["actor"], "system:suggestion")
+        self.assertEqual(row["review_status"], "suggestion")
+        self.assertEqual(row["confidence_band"], "auto")
+        self.assertEqual(row["score_or_reason_codes"][0], str(row["score"]))
+
+    def test_suggestion_rows_skip_no_link_by_default(self) -> None:
+        rows = suggestion_rows_for_subject(
+            {"subject_ref": "synthetic-subject-1", "name": "Jane Otherperson"},
+            [SYNTHETIC_PARTY],
+        )
+        self.assertEqual(rows, [])
 
 
 if __name__ == "__main__":
