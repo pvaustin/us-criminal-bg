@@ -17,6 +17,7 @@ US criminal background verification — court-source data platform.
 - Silver `court_party`: [`docs/silver/COURT_PARTY.md`](docs/silver/COURT_PARTY.md)
 - WCCA HTML SSR parseability: [`docs/silver/WCCA_HTML_SSR.md`](docs/silver/WCCA_HTML_SSR.md)
 - Match / review sketch: [`docs/silver/MATCH_REVIEW.md`](docs/silver/MATCH_REVIEW.md)
+- Pilot order subject + search audit: [`docs/silver/ORDER_AUDIT.md`](docs/silver/ORDER_AUDIT.md)
 - Source access / ToS notes: [`docs/bronze/ACCESS.md`](docs/bronze/ACCESS.md)
 - WCCA adapter + parser: [`sources/wcca/`](sources/wcca/)
 - Bronze jobs: [`bronze/jobs/README.md`](bronze/jobs/README.md)
