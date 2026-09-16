@@ -7,7 +7,7 @@
 
 This doc is the durable contract for Silver identifiers and transforms. It **mirrors** Bronze national-first principles: state is a **dimension / module**, never the top-level product prefix. Silver **reads** Bronze; it never writes Bronze.
 
-HTML snapshot parseability (what SSR text can and cannot fill) is documented in [`docs/silver/WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md). Match/review (employer subject vs `court_party`) is a **design sketch** in [`docs/silver/MATCH_REVIEW.md`](MATCH_REVIEW.md): **no silent auto-link**, MVP default **review** / **no-link**, later append-only `us_criminal_bg.silver.match_decision` (not created here). Not a hire/FCRA output.
+HTML snapshot parseability (what SSR text can and cannot fill) is documented in [`docs/silver/WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md). Party table `us_criminal_bg.silver.court_party` is documented in [`docs/silver/COURT_PARTY.md`](COURT_PARTY.md). Match/review (employer subject vs `court_party`) is a **design sketch** in [`docs/silver/MATCH_REVIEW.md`](MATCH_REVIEW.md): **no silent auto-link**, MVP default **review** / **no-link**, later append-only `us_criminal_bg.silver.match_decision` (not created here). Not a hire/FCRA output.
 
 ## Principles
 
@@ -34,7 +34,7 @@ Do **not** create `wi_*` catalogs/schemas. Wisconsin appears only as `state_code
 |-------|---------|
 | `us_criminal_bg.silver.court_case` | One **current** analytics-ready case row per natural key |
 | `us_criminal_bg.silver.court_charge` | One **current** charge row per case count number |
-| `us_criminal_bg.silver.court_party` | One **current** party row per role + ordinal (defendant / plaintiff / aka / other) |
+| `us_criminal_bg.silver.court_party` | One **current** party row per role + ordinal (defendant / plaintiff / aka / other). Full doc: [`COURT_PARTY.md`](COURT_PARTY.md) |
 | `us_criminal_bg.silver.transform_run` | One row per Silver transform **attempt** (success or failure) |
 
 Person **match scores** are not type-1 fact tables. `court_party` is source-extracted party facts. Later human/suggestion decisions belong in append-only `us_criminal_bg.silver.match_decision` (named in `MATCH_REVIEW.md`; **not** created in this version). Race is **omitted** from `court_party` (agency-provided subjective; matching must not require it).
@@ -56,6 +56,8 @@ Person **match scores** are not type-1 fact tables. `court_party` is source-extr
 - Lineage columns (`ingest_run_id`, `ingested_at`, `payload_sha256`, `transform_run_id`) match the parent case row used for the run.
 
 ### `court_party`
+
+Full table doc: [`docs/silver/COURT_PARTY.md`](COURT_PARTY.md) (purpose, schema, extraction, lineage, live grain `51:2026CF000028`, match/review consume, Uma attach).
 
 - **Natural key:** `(source_system, state_code, source_record_id, party_role, party_ordinal)` — type-1 MERGE.
 - `party_role` is one of `defendant`, `plaintiff`, `aka`, `other`. WI criminal captions typically yield **plaintiff 1** (`State of Wisconsin`) and **defendant 1**; `aka` ordinals follow **document order** of also-known-as **person names** (`Last, First[ M]`) in this payload — not the `Name Type Date of birth` header and not court-activity text.
@@ -197,7 +199,7 @@ Expected Silver attributes for that live Bronze grain after this parser (no defe
 | `case_status` | present from the `Case status` label |
 | `payload_parse_status` | `html_ssr_v1` when caption + filed_date + ≥1 charge succeed |
 | `court_charge` | N rows keyed by source count number (statute / description / severity; optional modifier on Python path) |
-| `court_party` | **plaintiff 1** (`State of Wisconsin`), **defendant 1** (labeled `Defendant name` when present), **aka N** = count of also-known-as name lines (do not commit live names/DOB/address) |
+| `court_party` | See [`COURT_PARTY.md`](COURT_PARTY.md): live grain **plaintiff 1**, **defendant 1**, **aka 4** (do not commit live names/DOB/street) |
 | DQ | `missing_caption` / `missing_filed_date` / `unparsed_html_spa` omitted when those fields parse |
 
 Live SSR for that grain includes a defendant block with labeled name, date of birth, sex, race, and address, plus also-known-as name lines. Silver persists name / DOB / sex / address_raw when labeled; it does **not** persist race. Warehouse apply of `court_party` is coordinator-side.
@@ -216,6 +218,7 @@ Live SSR for that grain includes a defendant block with labeled name, date of bi
 docs/
   bronze/NAMING.md
   silver/NAMING.md          ← this file (contract)
+  silver/COURT_PARTY.md     ← court_party schema / extraction / lineage
   silver/WCCA_HTML_SSR.md   ← what HTML snapshots can/cannot fill
   silver/MATCH_REVIEW.md    ← subject vs court_party review-queue sketch
 sources/
@@ -241,6 +244,7 @@ Bump `silver_schema_version` when Silver columns or parse-status/flag vocabulari
 
 ### Changelog
 
+- `2026-09-16` — Dedicated `docs/silver/COURT_PARTY.md` for `silver.court_party.v1` (schema, extraction, live grain, match/review consume).
 - `2026-09-16` — Match/review AC1: no silent auto-link; `dob_absent` → review; named `match_decision` append store (doc only).
 - `2026-09-16` — `silver.court_party.v1`: HTML SSR plaintiff / defendant / aka; labeled DOB/sex/address only; race omitted.
 - `2026-09-16` — `silver.court_case.v2` + `silver.court_charge.v1`: HTML SSR parser for caption / filed_date / case_status / county_name / charges; statuses `html_ssr_v1` and `html_ssr_partial`.
