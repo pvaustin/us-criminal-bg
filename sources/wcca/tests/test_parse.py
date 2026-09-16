@@ -21,6 +21,7 @@ from sources.wcca.parse import (  # noqa: E402
     parse_source_record_id,
     parse_source_url,
     parse_wcca_bronze_row,
+    split_person_name,
 )
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -438,6 +439,246 @@ class ParseHtmlSsrTests(unittest.TestCase):
         self.assertNotIn("Case summary", cap.group(1))
 
 
+class ParseHtmlSsrPartyTests(unittest.TestCase):
+    def test_parties_fixture_defendant_dob_aka_plaintiff(self) -> None:
+        html = (FIXTURES / "synthetic_html_ssr_parties.html").read_text(encoding="utf-8")
+        result = parse_wcca_bronze_row(
+            source_system="wcca",
+            source_record_id="01:2099CF000010",
+            source_url=(
+                "https://example.test/caseDetail.html?caseNo=2099CF000010&countyNo=1"
+            ),
+            payload_format="html_snapshot",
+            payload=html,
+        )
+        roles = [p.party_role for p in result.parties]
+        self.assertEqual(roles.count("plaintiff"), 1)
+        self.assertEqual(roles.count("defendant"), 1)
+        self.assertEqual(roles.count("aka"), 2)
+        plaintiff = next(p for p in result.parties if p.party_role == "plaintiff")
+        defendant = next(p for p in result.parties if p.party_role == "defendant")
+        akas = [p for p in result.parties if p.party_role == "aka"]
+        self.assertEqual(plaintiff.raw_name, "State of Wisconsin")
+        self.assertEqual(plaintiff.party_ordinal, 1)
+        self.assertIsNone(plaintiff.name_last)
+        self.assertIsNone(plaintiff.dob)
+        self.assertEqual(defendant.raw_name, "FIXTURE, JANE Q")
+        self.assertEqual(defendant.name_last, "FIXTURE")
+        self.assertEqual(defendant.name_first, "JANE")
+        self.assertEqual(defendant.name_middle, "Q")
+        self.assertEqual(defendant.dob, date(2099, 1, 15))
+        self.assertEqual(defendant.sex, "Female")
+        self.assertIn("100 SYNTHETIC WAY", defendant.address_raw or "")
+        self.assertIn("FIXTUREVILLE, WI 00000", defendant.address_raw or "")
+        self.assertNotIn("Branch ID", defendant.address_raw or "")
+        self.assertNotIn("DA case", defendant.address_raw or "")
+        self.assertNotIn("missing_dob", defendant.dq_flags)
+        self.assertNotIn("defendant_from_caption", defendant.dq_flags)
+        self.assertEqual(defendant.payload_parse_status, "html_ssr_v1")
+        self.assertEqual([a.party_ordinal for a in akas], [1, 2])
+        self.assertEqual(akas[0].raw_name, "FIXTURE, J Q")
+        self.assertEqual(akas[0].name_last, "FIXTURE")
+        self.assertEqual(akas[0].name_first, "J")
+        self.assertEqual(akas[0].name_middle, "Q")
+        self.assertEqual(akas[1].raw_name, "ALIASFIXTURE, JANE")
+        self.assertEqual(akas[1].name_last, "ALIASFIXTURE")
+        self.assertEqual(akas[1].name_first, "JANE")
+        self.assertIsNone(akas[1].dob)
+        blob = " ".join(
+            [
+                plaintiff.raw_name,
+                defendant.raw_name,
+                defendant.address_raw or "",
+                *(a.raw_name for a in akas),
+            ]
+        )
+        self.assertNotIn("SYNTHETIC-RACE-NOT-A-COLUMN", blob)
+        self.assertFalse(hasattr(defendant, "race"))
+        self.assertNotEqual(defendant.dob, result.filed_date)
+        self.assertEqual(result.filed_date, date(2099, 6, 1))
+
+    def test_caption_only_does_not_invent_dob_or_address(self) -> None:
+        html = (FIXTURES / "synthetic_html_ssr_v1.html").read_text(encoding="utf-8")
+        result = parse_wcca_bronze_row(
+            source_system="wcca",
+            source_record_id="01:2099CF000001",
+            source_url=(
+                "https://example.test/caseDetail.html?caseNo=2099CF000001&countyNo=1"
+            ),
+            payload_format="html_snapshot",
+            payload=html,
+        )
+        plaintiff = next(p for p in result.parties if p.party_role == "plaintiff")
+        defendant = next(p for p in result.parties if p.party_role == "defendant")
+        self.assertEqual(plaintiff.raw_name, "State of Wisconsin")
+        self.assertEqual(defendant.raw_name, "FIXTURE, JANE Q")
+        self.assertEqual(defendant.name_last, "FIXTURE")
+        self.assertEqual(defendant.name_first, "JANE")
+        self.assertIsNone(defendant.dob)
+        self.assertIsNone(defendant.sex)
+        self.assertIsNone(defendant.address_raw)
+        self.assertIn("missing_dob", defendant.dq_flags)
+        self.assertIn("defendant_from_caption", defendant.dq_flags)
+        self.assertEqual(defendant.payload_parse_status, "html_ssr_partial")
+        self.assertFalse(any(p.party_role == "aka" for p in result.parties))
+
+    def test_spa_shell_emits_no_parties(self) -> None:
+        spa = (FIXTURES / "synthetic_spa_shell.html").read_text(encoding="utf-8")
+        result = parse_wcca_bronze_row(
+            source_system="wcca",
+            source_record_id=LIVE_SOURCE_RECORD_ID,
+            source_url=LIVE_SOURCE_URL,
+            payload_format="html_snapshot",
+            payload=spa,
+        )
+        self.assertEqual(result.parties, ())
+
+    def test_split_person_name_null_when_ambiguous(self) -> None:
+        self.assertEqual(split_person_name("FIXTURE JANE Q"), (None, None, None))
+        self.assertEqual(split_person_name("State of Wisconsin"), (None, None, None))
+        self.assertEqual(
+            split_person_name("FIXTURE, JANE Q"), ("FIXTURE", "JANE", "Q")
+        )
+
+    def test_collapsed_party_labels_without_table_markup(self) -> None:
+        html = (
+            "<html><head><title>2099CF000011 Case Details in Fixture County"
+            "</title></head><body>"
+            "State of Wisconsin vs. FIXTURE, COLLAPSED PARTY "
+            "Filing date 07-04-2099 Case type Criminal Case status Open "
+            "Defendant name FIXTURE, COLLAPSED PARTY "
+            "Date of birth 03-03-2099 Sex Male "
+            "Race SYNTHETIC-RACE-NOT-A-COLUMN "
+            "Address 9 SYNTHETIC RD FIXTURE, WI 00000 "
+            "Branch ID 3 DA case number 2099CF000011 "
+            "Also known as Name Type Date of birth "
+            "FIXTURE, C P ALIASFIXTURE, COLLAPSED "
+            "Court activity 01-20-2099 Hearing Initial appearance "
+            "JUSTIS 000 Fingerprint none "
+            "Count no. Statute Description Severity Disposition "
+            "1 999.11 Synthetic collapsed party offense Felony"
+            "</body></html>"
+        )
+        result = parse_wcca_bronze_row(
+            source_system="wcca",
+            source_record_id="01:2099CF000011",
+            source_url=(
+                "https://example.test/caseDetail.html?caseNo=2099CF000011&countyNo=1"
+            ),
+            payload_format="html_snapshot",
+            payload=html,
+        )
+        defendant = next(p for p in result.parties if p.party_role == "defendant")
+        self.assertEqual(defendant.dob, date(2099, 3, 3))
+        self.assertEqual(defendant.sex, "Male")
+        self.assertIn("9 SYNTHETIC RD", defendant.address_raw or "")
+        self.assertNotIn("SYNTHETIC-RACE-NOT-A-COLUMN", defendant.address_raw or "")
+        self.assertNotIn("Branch ID", defendant.address_raw or "")
+        self.assertNotIn("DA case", defendant.address_raw or "")
+        akas = [p for p in result.parties if p.party_role == "aka"]
+        self.assertEqual([a.raw_name for a in akas], ["FIXTURE, C P", "ALIASFIXTURE, COLLAPSED"])
+        for aka in akas:
+            self.assertNotIn("Type", aka.raw_name)
+            self.assertNotIn("Date of birth", aka.raw_name)
+            self.assertNotIn("Hearing", aka.raw_name)
+            self.assertNotIn("JUSTIS", aka.raw_name)
+
+    def test_aka_header_and_address_stops_do_not_swallow_calendar(self) -> None:
+        html = (
+            FIXTURES / "synthetic_html_ssr_parties_aka_address_stops.html"
+        ).read_text(encoding="utf-8")
+        result = parse_wcca_bronze_row(
+            source_system="wcca",
+            source_record_id="01:2099CF000012",
+            source_url=(
+                "https://example.test/caseDetail.html?caseNo=2099CF000012&countyNo=1"
+            ),
+            payload_format="html_snapshot",
+            payload=html,
+        )
+        roles = [p.party_role for p in result.parties]
+        self.assertEqual(roles.count("plaintiff"), 1)
+        self.assertEqual(roles.count("defendant"), 1)
+        self.assertGreaterEqual(roles.count("aka"), 1)
+        plaintiff = next(p for p in result.parties if p.party_role == "plaintiff")
+        defendant = next(p for p in result.parties if p.party_role == "defendant")
+        akas = [p for p in result.parties if p.party_role == "aka"]
+        self.assertEqual(plaintiff.raw_name, "State of Wisconsin")
+        self.assertEqual(defendant.raw_name, "FIXTURE, JANE Q")
+        self.assertEqual(defendant.name_last, "FIXTURE")
+        self.assertEqual(defendant.name_first, "JANE")
+        self.assertEqual(defendant.name_middle, "Q")
+        self.assertEqual(defendant.dob, date(2099, 1, 15))
+        self.assertEqual(defendant.sex, "Female")
+        self.assertEqual(
+            defendant.address_raw, "100 SYNTHETIC WAY FIXTUREVILLE, WI 00000"
+        )
+        for junk in (
+            "Branch ID",
+            "DA case",
+            "Responsible",
+            "JUSTIS",
+            "Fingerprint",
+            "Attorneys",
+            "Hearing",
+            "Calendar",
+        ):
+            self.assertNotIn(junk, defendant.address_raw or "")
+        self.assertEqual(
+            [a.raw_name for a in akas],
+            ["FIXTURE, J Q", "ALIASFIXTURE, JANE", "FIXTUREALIAS, JANE Q"],
+        )
+        self.assertEqual([a.party_ordinal for a in akas], [1, 2, 3])
+        self.assertEqual(akas[0].name_last, "FIXTURE")
+        self.assertEqual(akas[0].name_first, "J")
+        self.assertEqual(akas[2].name_middle, "Q")
+        for aka in akas:
+            self.assertFalse(aka.raw_name.lower().startswith("type"))
+            self.assertNotIn("Date of birth", aka.raw_name)
+            self.assertNotIn("Name Type", aka.raw_name)
+            self.assertNotIn("Hearing", aka.raw_name)
+            self.assertNotIn("Calendar", aka.raw_name)
+            self.assertNotIn("JUSTIS", aka.raw_name)
+            self.assertNotIn("Fingerprint", aka.raw_name)
+            self.assertIsNotNone(aka.name_last)
+            self.assertIsNotNone(aka.name_first)
+
+    def test_aka_strips_trailing_also_from_delimiter(self) -> None:
+        html = (
+            "<html><head><title>2099CF000013 Case Details in Fixture County"
+            "</title></head><body>"
+            "State of Wisconsin vs. FIXTURE, JANE Q "
+            "Filing date 08-08-2099 Case type Criminal Case status Open "
+            "Defendant name FIXTURE, JANE Q Date of birth 01-15-2099 Sex Female "
+            "Address 100 SYNTHETIC WAY FIXTUREVILLE, WI 00000 "
+            "Also known as Name Type Date of birth "
+            "FIXTURE, TJ Also known as Name ALIASFIXTURE, JANE "
+            "Count no. Statute Description Severity Disposition "
+            "1 999.13 Synthetic trailing-also offense Felony"
+            "</body></html>"
+        )
+        result = parse_wcca_bronze_row(
+            source_system="wcca",
+            source_record_id="01:2099CF000013",
+            source_url=(
+                "https://example.test/caseDetail.html?caseNo=2099CF000013&countyNo=1"
+            ),
+            payload_format="html_snapshot",
+            payload=html,
+        )
+        akas = [p for p in result.parties if p.party_role == "aka"]
+        self.assertEqual(
+            [a.raw_name for a in akas], ["FIXTURE, TJ", "ALIASFIXTURE, JANE"]
+        )
+        self.assertEqual(akas[0].name_last, "FIXTURE")
+        self.assertEqual(akas[0].name_first, "TJ")
+        self.assertIsNone(akas[0].name_middle)
+        for aka in akas:
+            self.assertNotEqual((aka.name_middle or "").casefold(), "also")
+            self.assertFalse(aka.raw_name.lower().endswith(" also"))
+            self.assertNotIn("known as", aka.raw_name.lower())
+
+
 class SqlSsrRegexTests(unittest.TestCase):
     """Python stand-ins for the warehouse SQL regexes (Java-compatible subset)."""
 
@@ -479,6 +720,101 @@ class SqlSsrRegexTests(unittest.TestCase):
         self.assertTrue(parts[0].startswith("1 "))
         self.assertIn(">10-50g", parts[0])
         self.assertTrue(parts[7].startswith("8 "))
+
+    SQL_DEFENDANT_NAME = re.compile(
+        r"(?i)Defendant name\s*:?\s*(.+?)(?= Date of birth| Sex| Race| Address|"
+        r" Also known as| Charges| Count no\.| Filing date| Case type|"
+        r" Case status|$)"
+    )
+    SQL_DOB = re.compile(
+        r"(?i)Date of birth\s*:?\s*([0-9]{1,2}-[0-9]{1,2}-[0-9]{4})"
+    )
+    SQL_PLAINTIFF = re.compile(r"(?i)^(State of Wisconsin)\s+vs")
+    SQL_ADDRESS = re.compile(
+        r"(?i)Address\s*:?\s*(.+?)(?= Also known as| Charges| Count no\.|"
+        r" Court records| Court activit| Warrants| This is not the official|"
+        r" Phone| Prosecut| Defense| Responsible| Race| Sex| Date of birth|"
+        r" Branch| DA case| Attorneys?| JUSTIS| Fingerprint| Hearings?|"
+        r" Calendar|$)"
+    )
+    SQL_AKA_SECTION = re.compile(
+        r"(?i)Also known as\s+(.*?)(?= Charges| Count no\.| Court records|"
+        r" Court activit| Warrants| This is not the official| Branch| DA case|"
+        r" Attorneys?| JUSTIS| Fingerprint| Responsible| Hearings?| Calendar|$)"
+    )
+    SQL_AKA_PERSON_SPLIT = re.compile(r"(?= [A-Za-z][A-Za-z-]+,)")
+    SQL_AKA_PERSON = re.compile(
+        r"^([A-Za-z][A-Za-z-]+, *[A-Za-z][A-Za-z-]*(?: +[A-Za-z][A-Za-z-]*)?)"
+    )
+
+    def test_sql_party_regexes_on_collapsed_parties_fixture(self) -> None:
+        html = (FIXTURES / "synthetic_html_ssr_parties.html").read_text(encoding="utf-8")
+        text = html_to_text(html)
+        collapsed = re.sub(r"\s+", " ", text).strip()
+        name = self.SQL_DEFENDANT_NAME.search(collapsed)
+        dob = self.SQL_DOB.search(collapsed)
+        caption = "State of Wisconsin vs. FIXTURE, JANE Q"
+        plaintiff = self.SQL_PLAINTIFF.search(caption)
+        self.assertIsNotNone(name)
+        self.assertEqual(name.group(1).strip(), "FIXTURE, JANE Q")
+        self.assertNotIn("SYNTHETIC-RACE-NOT-A-COLUMN", name.group(1))
+        self.assertEqual(dob.group(1), "01-15-2099")
+        self.assertEqual(plaintiff.group(1), "State of Wisconsin")
+        aka_section = self.SQL_AKA_SECTION.search(collapsed)
+        self.assertIsNotNone(aka_section)
+        akas = []
+        for part in self.SQL_AKA_PERSON_SPLIT.split(aka_section.group(1)):
+            part = part.strip()
+            if not part or part.lower().startswith(("name", "type", "date")):
+                continue
+            match = self.SQL_AKA_PERSON.match(part)
+            if not match:
+                continue
+            aka_name = re.sub(
+                r"(?i)\s+(AKA|Alias|Maiden|Type|Also)$", "", match.group(1)
+            ).strip()
+            if aka_name and len(aka_name) <= 80:
+                akas.append(aka_name)
+        self.assertGreaterEqual(len(akas), 2)
+        self.assertEqual(akas[0], "FIXTURE, J Q")
+        self.assertTrue(any(a.startswith("ALIASFIXTURE") for a in akas))
+        addr = self.SQL_ADDRESS.search(collapsed)
+        self.assertIsNotNone(addr)
+        self.assertIn("100 SYNTHETIC WAY", addr.group(1))
+        self.assertNotIn("Branch ID", addr.group(1))
+        self.assertNotIn("DA case", addr.group(1))
+
+    def test_sql_aka_split_skips_header_and_calendar(self) -> None:
+        html = (
+            FIXTURES / "synthetic_html_ssr_parties_aka_address_stops.html"
+        ).read_text(encoding="utf-8")
+        collapsed = re.sub(r"\s+", " ", html_to_text(html)).strip()
+        addr = self.SQL_ADDRESS.search(collapsed)
+        self.assertIsNotNone(addr)
+        self.assertEqual(
+            re.sub(r"\s+", " ", addr.group(1)).strip(),
+            "100 SYNTHETIC WAY FIXTUREVILLE, WI 00000",
+        )
+        self.assertNotIn("Branch", addr.group(1))
+        section = self.SQL_AKA_SECTION.search(collapsed)
+        self.assertIsNotNone(section)
+        self.assertNotIn("Hearing", section.group(1))
+        self.assertNotIn("JUSTIS", section.group(1))
+        akas = []
+        for part in self.SQL_AKA_PERSON_SPLIT.split(section.group(1)):
+            part = part.strip()
+            if not part or part.lower().startswith(("name", "type", "date")):
+                continue
+            match = self.SQL_AKA_PERSON.match(part)
+            if match:
+                akas.append(
+                    re.sub(
+                        r"(?i)\s+(AKA|Alias|Maiden|Type|Also)$", "", match.group(1)
+                    ).strip()
+                )
+        self.assertEqual(
+            akas, ["FIXTURE, J Q", "ALIASFIXTURE, JANE", "FIXTUREALIAS, JANE Q"]
+        )
 
 
 if __name__ == "__main__":

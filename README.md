@@ -15,6 +15,7 @@ US criminal background verification — court-source data platform.
 - Bronze naming contract: [`docs/bronze/NAMING.md`](docs/bronze/NAMING.md)
 - Silver naming contract: [`docs/silver/NAMING.md`](docs/silver/NAMING.md)
 - WCCA HTML SSR parseability: [`docs/silver/WCCA_HTML_SSR.md`](docs/silver/WCCA_HTML_SSR.md)
+- Match / review sketch: [`docs/silver/MATCH_REVIEW.md`](docs/silver/MATCH_REVIEW.md)
 - Source access / ToS notes: [`docs/bronze/ACCESS.md`](docs/bronze/ACCESS.md)
 - WCCA adapter + parser: [`sources/wcca/`](sources/wcca/)
 - Bronze jobs: [`bronze/jobs/README.md`](bronze/jobs/README.md)

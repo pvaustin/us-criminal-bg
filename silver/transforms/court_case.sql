@@ -1,13 +1,16 @@
--- Idempotent type-1 MERGE: bronze.court_case_raw → silver.court_case + silver.court_charge
+-- Idempotent type-1 MERGE: bronze.court_case_raw → silver.court_case
+--   + silver.court_charge + silver.court_party
 -- Contract: docs/silver/NAMING.md
 -- Parses identifiers from source_record_id / URL, then HTML SSR labels from payload
 -- text after scripts/styles/tags are stripped (see docs/silver/WCCA_HTML_SSR.md).
 -- Charge modifier_* columns are left null in this SQL path; the Python job fills them.
+-- Party name parts are comma-split best-effort; prefer the Python job for aka/name DQ.
 -- Does not mutate Bronze.
 --
--- Apply after silver/schemas/court_case.sql and silver/schemas/court_charge.sql.
+-- Apply after silver/schemas/court_case.sql, court_charge.sql, and court_party.sql.
 -- Re-run is safe: court_case upserts on (source_system, state_code, source_record_id);
--- court_charge upserts on those plus charge_count; stale charge counts for cases in
+-- court_charge upserts on those plus charge_count; court_party upserts on those plus
+-- (party_role, party_ordinal). Stale charge counts and party ordinals for cases in
 -- this run are deleted. A new transform_run row is appended each attempt.
 --
 -- transform_run_id is materialized once into a 1-row Delta table. A TEMP VIEW
@@ -238,7 +241,101 @@ extracted AS (
         '(?=[0-9]+ [0-9]{3}\\.[0-9]{2,4}(?:\\([^)]+\\))*)'
       ),
       x -> trim(x) RLIKE '^[0-9]+ [0-9]{3}\\.[0-9]{2,4}'
-    ) AS charge_raws
+    ) AS charge_raws,
+    nullif(
+      trim(
+        regexp_extract(
+          s.ssr_text,
+          '(?i)Defendant name\\s*:?\\s*(.+?)(?= Date of birth| Sex| Race| Address| Also known as| Charges| Count no\\.| Filing date| Case type| Case status|$)',
+          1
+        )
+      ),
+      ''
+    ) AS defendant_name_labeled,
+    coalesce(
+      try_to_date(
+        nullif(
+          regexp_extract(s.ssr_text, '(?i)Date of birth\\s*:?\\s*([0-9]{1,2}-[0-9]{1,2}-[0-9]{4})', 1),
+          ''
+        ),
+        'MM-dd-yyyy'
+      ),
+      try_to_date(
+        nullif(
+          regexp_extract(s.ssr_text, '(?i)Date of birth\\s*:?\\s*([0-9]{1,2}-[0-9]{1,2}-[0-9]{4})', 1),
+          ''
+        ),
+        'M-d-yyyy'
+      ),
+      try_to_date(
+        nullif(
+          regexp_extract(s.ssr_text, '(?i)Date of birth\\s*:?\\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{4})', 1),
+          ''
+        ),
+        'MM/dd/yyyy'
+      )
+    ) AS party_dob,
+    nullif(
+      trim(
+        regexp_extract(
+          s.ssr_text,
+          '(?i)Sex\\s*:?\\s*(Male|Female|Unknown)(?= Race| Address| Also known as| Date of birth| Charges| Count no\\.| Branch| DA case|$)',
+          1
+        )
+      ),
+      ''
+    ) AS party_sex,
+    nullif(
+      trim(
+        regexp_extract(
+          s.ssr_text,
+          '(?i)Address\\s*:?\\s*(.+?)(?= Also known as| Charges| Count no\\.| Court records| Court activit| Warrants| This is not the official| Phone| Prosecut| Defense| Responsible| Race| Sex| Date of birth| Branch| DA case| Attorneys?| JUSTIS| Fingerprint| Hearings?| Calendar|$)',
+          1
+        )
+      ),
+      ''
+    ) AS party_address,
+    filter(
+      transform(
+        filter(
+          split(
+            coalesce(
+              nullif(
+                trim(
+                  regexp_extract(
+                    s.ssr_text,
+                    '(?i)Also known as\\s+(.*?)(?= Charges| Count no\\.| Court records| Court activit| Warrants| This is not the official| Branch| DA case| Attorneys?| JUSTIS| Fingerprint| Responsible| Hearings?| Calendar|$)',
+                    1
+                  )
+                ),
+                ''
+              ),
+              ''
+            ),
+            '(?= [A-Za-z][A-Za-z-]+,)'
+          ),
+          x -> trim(x) RLIKE '^[A-Za-z][A-Za-z-]+, *[A-Za-z]'
+            AND NOT lower(trim(x)) RLIKE '^(name|type|date)( |$)'
+        ),
+        x -> trim(
+          regexp_replace(
+            regexp_extract(
+              trim(x),
+              '^([A-Za-z][A-Za-z-]+, *[A-Za-z][A-Za-z-]*(?: +[A-Za-z][A-Za-z-]*)?)',
+              1
+            ),
+            '(?i) +(AKA|Alias|Maiden|Type|Also)$',
+            ''
+          )
+        )
+      ),
+      x -> x IS NOT NULL AND trim(x) <> ''
+       AND lower(trim(x)) NOT IN ('name', 'also known as', 'type', 'date of birth')
+       AND NOT lower(x) LIKE '%date of birth%'
+       AND NOT lower(x) LIKE '%branch id%'
+       AND length(x) <= 80
+       AND size(split(x, ' ')) <= 6
+    ) AS aka_raws
   FROM ssr s
 )
 SELECT
@@ -260,6 +357,11 @@ SELECT
   e.case_status,
   e.county_name,
   e.charge_raws,
+  e.defendant_name_labeled,
+  e.party_dob,
+  e.party_sex,
+  e.party_address,
+  e.aka_raws,
   CASE
     WHEN e.source_system <> 'wcca' THEN 'unsupported_source'
     WHEN e.county_code IS NULL OR e.case_number IS NULL THEN 'identifier_error'
@@ -523,6 +625,272 @@ AND NOT EXISTS (
     AND t.state_code = c.state_code
     AND t.source_record_id = c.source_record_id
     AND t.charge_count = c.charge_count
+);
+
+CREATE OR REPLACE TEMP VIEW silver_court_party_staged AS
+WITH base AS (
+  SELECT
+    s.source_system,
+    s.state_code,
+    s.source_record_id,
+    s.ingest_run_id,
+    s.ingested_at,
+    s.payload_sha256,
+    s.bronze_schema_version,
+    s.transformed_at,
+    s.transform_run_id,
+    nullif(
+      trim(
+        regexp_extract(coalesce(s.caption, ''), '(?i)^(State of Wisconsin)\\s+vs', 1)
+      ),
+      ''
+    ) AS plaintiff_raw,
+    coalesce(
+      s.defendant_name_labeled,
+      nullif(
+        trim(
+          regexp_extract(
+            coalesce(s.caption, ''),
+            '(?i)State of Wisconsin\\s+vs\\.?\\s+(.+)$',
+            1
+          )
+        ),
+        ''
+      )
+    ) AS defendant_raw,
+    CASE
+      WHEN s.defendant_name_labeled IS NULL
+       AND nullif(
+             trim(
+               regexp_extract(
+                 coalesce(s.caption, ''),
+                 '(?i)State of Wisconsin\\s+vs\\.?\\s+(.+)$',
+                 1
+               )
+             ),
+             ''
+           ) IS NOT NULL
+        THEN true
+      ELSE false
+    END AS defendant_from_caption,
+    s.party_dob,
+    s.party_sex,
+    s.party_address,
+    coalesce(s.aka_raws, array()) AS aka_raws
+  FROM silver_court_case_staged s
+),
+unioned AS (
+  SELECT
+    b.source_system,
+    b.state_code,
+    b.source_record_id,
+    'plaintiff' AS party_role,
+    1 AS party_ordinal,
+    b.plaintiff_raw AS raw_name,
+    CAST(NULL AS DATE) AS dob,
+    CAST(NULL AS STRING) AS sex,
+    CAST(NULL AS STRING) AS address_raw,
+    'html_ssr_v1' AS payload_parse_status,
+    false AS defendant_from_caption,
+    b.ingest_run_id,
+    b.ingested_at,
+    b.payload_sha256,
+    b.bronze_schema_version,
+    b.transformed_at,
+    b.transform_run_id
+  FROM base b
+  WHERE b.plaintiff_raw IS NOT NULL
+  UNION ALL
+  SELECT
+    b.source_system,
+    b.state_code,
+    b.source_record_id,
+    'defendant' AS party_role,
+    1 AS party_ordinal,
+    b.defendant_raw AS raw_name,
+    b.party_dob AS dob,
+    b.party_sex AS sex,
+    b.party_address AS address_raw,
+    CASE
+      WHEN b.defendant_from_caption THEN 'html_ssr_partial'
+      ELSE 'html_ssr_v1'
+    END AS payload_parse_status,
+    b.defendant_from_caption,
+    b.ingest_run_id,
+    b.ingested_at,
+    b.payload_sha256,
+    b.bronze_schema_version,
+    b.transformed_at,
+    b.transform_run_id
+  FROM base b
+  WHERE b.defendant_raw IS NOT NULL
+  UNION ALL
+  SELECT
+    b.source_system,
+    b.state_code,
+    b.source_record_id,
+    'aka' AS party_role,
+    CAST(x.aka_pos + 1 AS INT) AS party_ordinal,
+    trim(x.aka_raw) AS raw_name,
+    CAST(NULL AS DATE) AS dob,
+    CAST(NULL AS STRING) AS sex,
+    CAST(NULL AS STRING) AS address_raw,
+    'html_ssr_v1' AS payload_parse_status,
+    false AS defendant_from_caption,
+    b.ingest_run_id,
+    b.ingested_at,
+    b.payload_sha256,
+    b.bronze_schema_version,
+    b.transformed_at,
+    b.transform_run_id
+  FROM base b
+  LATERAL VIEW posexplode(b.aka_raws) x AS aka_pos, aka_raw
+  WHERE trim(x.aka_raw) <> ''
+    AND lower(trim(x.aka_raw)) <> lower(coalesce(b.defendant_raw, ''))
+    AND lower(trim(x.aka_raw)) <> lower(coalesce(b.plaintiff_raw, ''))
+    AND trim(x.aka_raw) RLIKE '^[A-Za-z].*, *[A-Za-z]'
+    AND NOT lower(trim(x.aka_raw)) RLIKE '^(name|type|date)( |$)'
+    AND length(trim(x.aka_raw)) <= 80
+)
+SELECT
+  u.source_system,
+  u.state_code,
+  u.source_record_id,
+  u.party_role,
+  u.party_ordinal,
+  u.raw_name,
+  CASE
+    WHEN u.raw_name LIKE '%,%' THEN nullif(trim(split(u.raw_name, ',')[0]), '')
+    ELSE CAST(NULL AS STRING)
+  END AS name_last,
+  CASE
+    WHEN u.raw_name LIKE '%,%'
+      THEN nullif(trim(split(trim(split(u.raw_name, ',')[1]), ' ')[0]), '')
+    ELSE CAST(NULL AS STRING)
+  END AS name_first,
+  CASE
+    WHEN u.raw_name LIKE '%,%'
+     AND size(split(trim(split(u.raw_name, ',')[1]), ' ')) > 1
+      THEN nullif(
+        trim(regexp_replace(trim(split(u.raw_name, ',')[1]), '^[^ ]+\\s+', '')),
+        ''
+      )
+    ELSE CAST(NULL AS STRING)
+  END AS name_middle,
+  u.dob,
+  u.sex,
+  u.address_raw,
+  u.ingest_run_id,
+  u.ingested_at,
+  u.payload_sha256,
+  u.bronze_schema_version,
+  'silver.court_party.v1' AS silver_schema_version,
+  u.transformed_at,
+  u.transform_run_id,
+  u.payload_parse_status,
+  filter(
+    array(
+      CASE
+        WHEN u.party_role <> 'plaintiff'
+         AND u.raw_name NOT LIKE '%,%'
+         AND NOT lower(u.raw_name) RLIKE '^state of wisconsin$'
+          THEN 'ambiguous_name_parts'
+      END,
+      CASE WHEN u.party_role = 'defendant' AND u.dob IS NULL THEN 'missing_dob' END,
+      CASE
+        WHEN u.party_role = 'defendant' AND u.defendant_from_caption
+          THEN 'defendant_from_caption'
+      END
+    ),
+    x -> x IS NOT NULL
+  ) AS dq_flags
+FROM unioned u;
+
+MERGE INTO us_criminal_bg.silver.court_party AS t
+USING silver_court_party_staged AS s
+ON t.source_system = s.source_system
+ AND t.state_code = s.state_code
+ AND t.source_record_id = s.source_record_id
+ AND t.party_role = s.party_role
+ AND t.party_ordinal = s.party_ordinal
+WHEN MATCHED THEN UPDATE SET
+  t.raw_name = s.raw_name,
+  t.name_last = s.name_last,
+  t.name_first = s.name_first,
+  t.name_middle = s.name_middle,
+  t.dob = s.dob,
+  t.sex = s.sex,
+  t.address_raw = s.address_raw,
+  t.ingest_run_id = s.ingest_run_id,
+  t.ingested_at = s.ingested_at,
+  t.payload_sha256 = s.payload_sha256,
+  t.bronze_schema_version = s.bronze_schema_version,
+  t.silver_schema_version = s.silver_schema_version,
+  t.transformed_at = s.transformed_at,
+  t.transform_run_id = s.transform_run_id,
+  t.payload_parse_status = s.payload_parse_status,
+  t.dq_flags = s.dq_flags
+WHEN NOT MATCHED THEN INSERT (
+  source_system,
+  state_code,
+  source_record_id,
+  party_role,
+  party_ordinal,
+  raw_name,
+  name_last,
+  name_first,
+  name_middle,
+  dob,
+  sex,
+  address_raw,
+  ingest_run_id,
+  ingested_at,
+  payload_sha256,
+  bronze_schema_version,
+  silver_schema_version,
+  transformed_at,
+  transform_run_id,
+  payload_parse_status,
+  dq_flags
+) VALUES (
+  s.source_system,
+  s.state_code,
+  s.source_record_id,
+  s.party_role,
+  s.party_ordinal,
+  s.raw_name,
+  s.name_last,
+  s.name_first,
+  s.name_middle,
+  s.dob,
+  s.sex,
+  s.address_raw,
+  s.ingest_run_id,
+  s.ingested_at,
+  s.payload_sha256,
+  s.bronze_schema_version,
+  s.silver_schema_version,
+  s.transformed_at,
+  s.transform_run_id,
+  s.payload_parse_status,
+  s.dq_flags
+);
+
+-- Type-1: drop party_role+ordinal rows that disappeared for cases processed this run.
+DELETE FROM us_criminal_bg.silver.court_party t
+WHERE EXISTS (
+  SELECT 1 FROM silver_court_case_staged s
+  WHERE t.source_system = s.source_system
+    AND t.state_code = s.state_code
+    AND t.source_record_id = s.source_record_id
+)
+AND NOT EXISTS (
+  SELECT 1 FROM silver_court_party_staged p
+  WHERE t.source_system = p.source_system
+    AND t.state_code = p.state_code
+    AND t.source_record_id = p.source_record_id
+    AND t.party_role = p.party_role
+    AND t.party_ordinal = p.party_ordinal
 );
 
 -- Finalize using the materialized id (constant row), not a uuid() temp view.

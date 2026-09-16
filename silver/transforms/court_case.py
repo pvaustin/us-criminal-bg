@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Bronze court_case_raw → silver.court_case + silver.court_charge type-1 MERGE.
+"""Bronze court_case_raw → silver.court_case + court_charge + court_party type-1 MERGE.
 
 Reads Bronze only. Idempotent upsert:
   court_case  on (source_system, state_code, source_record_id)
   court_charge on (source_system, state_code, source_record_id, charge_count)
+  court_party  on (source_system, state_code, source_record_id, party_role, party_ordinal)
 Always appends silver.transform_run. transform_run_id is materialized once into
 us_criminal_bg.silver._this_transform_run (same scratch pattern as the SQL job).
 
@@ -25,6 +26,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from sources.wcca.parse import (  # noqa: E402
     SILVER_CHARGE_SCHEMA_VERSION,
+    SILVER_PARTY_SCHEMA_VERSION,
     SILVER_SCHEMA_VERSION,
     parse_wcca_bronze_row,
 )
@@ -33,6 +35,7 @@ BRONZE_TABLE = "us_criminal_bg.bronze.court_case_raw"
 INGEST_RUN_TABLE = "us_criminal_bg.bronze.ingest_run"
 SILVER_CASE_TABLE = "us_criminal_bg.silver.court_case"
 SILVER_CHARGE_TABLE = "us_criminal_bg.silver.court_charge"
+SILVER_PARTY_TABLE = "us_criminal_bg.silver.court_party"
 SILVER_RUN_TABLE = "us_criminal_bg.silver.transform_run"
 THIS_RUN_TABLE = "us_criminal_bg.silver._this_transform_run"
 
@@ -64,6 +67,21 @@ def _register_parse_udf(spark):
             StructField("modifier_text", StringType()),
         ]
     )
+    party_schema = StructType(
+        [
+            StructField("party_role", StringType()),
+            StructField("party_ordinal", IntegerType()),
+            StructField("raw_name", StringType()),
+            StructField("name_last", StringType()),
+            StructField("name_first", StringType()),
+            StructField("name_middle", StringType()),
+            StructField("dob", DateType()),
+            StructField("sex", StringType()),
+            StructField("address_raw", StringType()),
+            StructField("payload_parse_status", StringType()),
+            StructField("dq_flags", ArrayType(StringType())),
+        ]
+    )
     schema = StructType(
         [
             StructField("county_code", StringType()),
@@ -76,6 +94,7 @@ def _register_parse_udf(spark):
             StructField("payload_parse_status", StringType()),
             StructField("dq_flags", ArrayType(StringType())),
             StructField("charges", ArrayType(charge_schema)),
+            StructField("parties", ArrayType(party_schema)),
         ]
     )
 
@@ -99,6 +118,22 @@ def _register_parse_udf(spark):
             )
             for c in parsed.charges
         ]
+        parties = [
+            (
+                p.party_role,
+                p.party_ordinal,
+                p.raw_name,
+                p.name_last,
+                p.name_first,
+                p.name_middle,
+                p.dob,
+                p.sex,
+                p.address_raw,
+                p.payload_parse_status,
+                list(p.dq_flags),
+            )
+            for p in parsed.parties
+        ]
         return (
             parsed.county_code,
             parsed.case_number,
@@ -110,13 +145,14 @@ def _register_parse_udf(spark):
             parsed.payload_parse_status,
             list(parsed.dq_flags),
             charges,
+            parties,
         )
 
     return parse_udf
 
 
 def apply_transform(spark, *, notes: str = "python html_ssr_v1 MERGE") -> str:
-    """Run type-1 MERGE for court_case and court_charge. Returns transform_run_id."""
+    """Run type-1 MERGE for court_case, court_charge, and court_party. Returns transform_run_id."""
     run_id = str(uuid4())
     started = datetime.now(timezone.utc)
     label = started.strftime("all_all_%Y%m%d_%H%M%S") + "Z"
@@ -244,6 +280,43 @@ QUALIFY row_number() OVER (
     )
     charges.createOrReplaceTempView("silver_court_charge_staged")
 
+    parties = (
+        parsed.select(
+            F.col("source_system"),
+            F.col("state_code"),
+            F.col("source_record_id"),
+            F.col("ingest_run_id"),
+            F.col("ingested_at"),
+            F.col("payload_sha256"),
+            F.col("schema_version").alias("bronze_schema_version"),
+            F.explode(F.col("p.parties")).alias("pt"),
+        )
+        .select(
+            F.col("source_system"),
+            F.col("state_code"),
+            F.col("source_record_id"),
+            F.col("pt.party_role").alias("party_role"),
+            F.col("pt.party_ordinal").alias("party_ordinal"),
+            F.col("pt.raw_name").alias("raw_name"),
+            F.col("pt.name_last").alias("name_last"),
+            F.col("pt.name_first").alias("name_first"),
+            F.col("pt.name_middle").alias("name_middle"),
+            F.col("pt.dob").alias("dob"),
+            F.col("pt.sex").alias("sex"),
+            F.col("pt.address_raw").alias("address_raw"),
+            F.col("ingest_run_id"),
+            F.col("ingested_at"),
+            F.col("payload_sha256"),
+            F.col("bronze_schema_version"),
+            F.lit(SILVER_PARTY_SCHEMA_VERSION).alias("silver_schema_version"),
+            F.current_timestamp().alias("transformed_at"),
+            F.lit(run_id).alias("transform_run_id"),
+            F.col("pt.payload_parse_status").alias("payload_parse_status"),
+            F.col("pt.dq_flags").alias("dq_flags"),
+        )
+    )
+    parties.createOrReplaceTempView("silver_court_party_staged")
+
     spark.sql(
         f"""
 MERGE INTO {SILVER_CASE_TABLE} AS t
@@ -343,6 +416,68 @@ AND NOT EXISTS (
 
     spark.sql(
         f"""
+MERGE INTO {SILVER_PARTY_TABLE} AS t
+USING silver_court_party_staged AS s
+ON t.source_system = s.source_system
+ AND t.state_code = s.state_code
+ AND t.source_record_id = s.source_record_id
+ AND t.party_role = s.party_role
+ AND t.party_ordinal = s.party_ordinal
+WHEN MATCHED THEN UPDATE SET
+  t.raw_name = s.raw_name,
+  t.name_last = s.name_last,
+  t.name_first = s.name_first,
+  t.name_middle = s.name_middle,
+  t.dob = s.dob,
+  t.sex = s.sex,
+  t.address_raw = s.address_raw,
+  t.ingest_run_id = s.ingest_run_id,
+  t.ingested_at = s.ingested_at,
+  t.payload_sha256 = s.payload_sha256,
+  t.bronze_schema_version = s.bronze_schema_version,
+  t.silver_schema_version = s.silver_schema_version,
+  t.transformed_at = s.transformed_at,
+  t.transform_run_id = s.transform_run_id,
+  t.payload_parse_status = s.payload_parse_status,
+  t.dq_flags = s.dq_flags
+WHEN NOT MATCHED THEN INSERT (
+  source_system, state_code, source_record_id, party_role, party_ordinal,
+  raw_name, name_last, name_first, name_middle, dob, sex, address_raw,
+  ingest_run_id, ingested_at, payload_sha256, bronze_schema_version,
+  silver_schema_version, transformed_at, transform_run_id,
+  payload_parse_status, dq_flags
+) VALUES (
+  s.source_system, s.state_code, s.source_record_id, s.party_role, s.party_ordinal,
+  s.raw_name, s.name_last, s.name_first, s.name_middle, s.dob, s.sex, s.address_raw,
+  s.ingest_run_id, s.ingested_at, s.payload_sha256, s.bronze_schema_version,
+  s.silver_schema_version, s.transformed_at, s.transform_run_id,
+  s.payload_parse_status, s.dq_flags
+)
+"""
+    )
+
+    spark.sql(
+        f"""
+DELETE FROM {SILVER_PARTY_TABLE} t
+WHERE EXISTS (
+  SELECT 1 FROM silver_court_case_staged s
+  WHERE t.source_system = s.source_system
+    AND t.state_code = s.state_code
+    AND t.source_record_id = s.source_record_id
+)
+AND NOT EXISTS (
+  SELECT 1 FROM silver_court_party_staged p
+  WHERE t.source_system = p.source_system
+    AND t.state_code = p.state_code
+    AND t.source_record_id = p.source_record_id
+    AND t.party_role = p.party_role
+    AND t.party_ordinal = p.party_ordinal
+)
+"""
+    )
+
+    spark.sql(
+        f"""
 UPDATE {SILVER_RUN_TABLE} t
 SET
   finished_at = current_timestamp(),
@@ -365,8 +500,9 @@ WHERE t.status = 'running'
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "MERGE Bronze court_case_raw into Silver court_case and court_charge. "
-            "Databricks/Spark only for --apply. Does not scrape or write Bronze."
+            "MERGE Bronze court_case_raw into Silver court_case, court_charge, "
+            "and court_party. Databricks/Spark only for --apply. Does not scrape "
+            "or write Bronze."
         )
     )
     parser.add_argument(
@@ -382,7 +518,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(
             "SQL path: silver/transforms/court_case.sql "
-            "(SSR regex on warehouse; modifiers best from this Python job)"
+            "(SSR regex on warehouse; modifiers and party DQ best from this Python job)"
         )
         return 0
     spark = _spark()
@@ -390,6 +526,7 @@ def main(argv: list[str] | None = None) -> int:
     print("transform_run_id=", run_id)
     print("silver_schema_version=", SILVER_SCHEMA_VERSION)
     print("silver_charge_schema_version=", SILVER_CHARGE_SCHEMA_VERSION)
+    print("silver_party_schema_version=", SILVER_PARTY_SCHEMA_VERSION)
     return 0
 
 

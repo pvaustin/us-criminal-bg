@@ -1,4 +1,4 @@
-"""Map a Bronze court_case_raw dict to Silver court_case / court_charge attributes.
+"""Map a Bronze court_case_raw dict to Silver court_case / court_charge / court_party.
 
 Pure Python: unit-testable without Spark. Databricks job uses the same function.
 Never writes Bronze. Never scrapes.
@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 from sources.wcca.parse import (
     SILVER_CHARGE_SCHEMA_VERSION,
+    SILVER_PARTY_SCHEMA_VERSION,
     SILVER_SCHEMA_VERSION,
     parse_wcca_bronze_row,
 )
@@ -52,6 +53,27 @@ CHARGE_BUSINESS_COLUMNS = (
     "payload_sha256",
     "bronze_schema_version",
     "silver_schema_version",
+)
+
+PARTY_BUSINESS_COLUMNS = (
+    "source_system",
+    "state_code",
+    "source_record_id",
+    "party_role",
+    "party_ordinal",
+    "raw_name",
+    "name_last",
+    "name_first",
+    "name_middle",
+    "dob",
+    "sex",
+    "address_raw",
+    "ingest_run_id",
+    "payload_sha256",
+    "bronze_schema_version",
+    "silver_schema_version",
+    "payload_parse_status",
+    "dq_flags",
 )
 
 
@@ -150,10 +172,60 @@ def map_bronze_to_court_charges(
     return rows
 
 
+def map_bronze_to_court_parties(
+    bronze: Mapping[str, Any],
+    *,
+    transform_run_id: str,
+    transformed_at: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Build Silver court_party rows for one Bronze case. Empty if none parsed."""
+    parsed = parse_wcca_bronze_row(
+        source_system=bronze.get("source_system"),
+        source_record_id=bronze.get("source_record_id"),
+        source_url=bronze.get("source_url"),
+        payload_format=bronze.get("payload_format"),
+        payload=bronze.get("payload"),
+    )
+    ts = transformed_at or datetime.now(timezone.utc)
+    bronze_schema = bronze.get("schema_version") or bronze.get(
+        "bronze_schema_version"
+    )
+    rows: list[dict[str, Any]] = []
+    for party in parsed.parties:
+        rows.append(
+            {
+                "source_system": bronze.get("source_system"),
+                "state_code": bronze.get("state_code"),
+                "source_record_id": bronze.get("source_record_id"),
+                "party_role": party.party_role,
+                "party_ordinal": party.party_ordinal,
+                "raw_name": party.raw_name,
+                "name_last": party.name_last,
+                "name_first": party.name_first,
+                "name_middle": party.name_middle,
+                "dob": party.dob,
+                "sex": party.sex,
+                "address_raw": party.address_raw,
+                "ingest_run_id": bronze.get("ingest_run_id"),
+                "ingested_at": _as_utc(bronze.get("ingested_at")),
+                "payload_sha256": bronze.get("payload_sha256"),
+                "bronze_schema_version": bronze_schema,
+                "silver_schema_version": SILVER_PARTY_SCHEMA_VERSION,
+                "transformed_at": ts,
+                "transform_run_id": transform_run_id,
+                "payload_parse_status": party.payload_parse_status,
+                "dq_flags": list(party.dq_flags),
+            }
+        )
+    return rows
+
+
 def business_fields(row: Mapping[str, Any]) -> dict[str, Any]:
     """Comparable projection for idempotency checks (excludes run timestamps/ids)."""
     keys = (
-        CHARGE_BUSINESS_COLUMNS
+        PARTY_BUSINESS_COLUMNS
+        if "party_role" in row
+        else CHARGE_BUSINESS_COLUMNS
         if "charge_count" in row
         else BUSINESS_COLUMNS
     )
