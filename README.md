@@ -22,6 +22,16 @@ US criminal background verification — court-source data platform.
 - Bronze jobs: [`bronze/jobs/README.md`](bronze/jobs/README.md)
 - Silver jobs: [`silver/jobs/README.md`](silver/jobs/README.md)
 
+## Product docs
+
+Product concept, PRD sketch, roadmap, strategy, and market personas live in [`docs/product/`](docs/product/). Beachhead is locked: WI employers/HR now; staffing next; individuals later.
+
+- Concept: [`docs/product/01-product-concept.md`](docs/product/01-product-concept.md)
+- PRD sketch: [`docs/product/02-prd-sketch.md`](docs/product/02-prd-sketch.md)
+- Roadmap: [`docs/product/03-roadmap.md`](docs/product/03-roadmap.md)
+- Strategy: [`docs/product/04-strategy.md`](docs/product/04-strategy.md)
+- Market + personas: [`docs/product/05-market-personas.md`](docs/product/05-market-personas.md)
+
 ## Databricks (non-secret)
 
 - Host: `dbc-a0dcbe75-2647.cloud.databricks.com`
