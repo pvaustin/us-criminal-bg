@@ -43,4 +43,4 @@ python3 bronze/jobs/load_sf_criminal_hf.py
 python3 bronze/jobs/load_sf_criminal_hf.py --limit 50
 ```
 
-Same env defaults as the WCCA CLI (`DATABRICKS_CONFIG_PROFILE`, `DATABRICKS_WAREHOUSE_ID`). Do not commit parquet files. See [`docs/bronze/ACCESS_SF_CRIMINAL_HF.md`](../../docs/bronze/ACCESS_SF_CRIMINAL_HF.md).
+Same env defaults as the WCCA CLI (`DATABRICKS_CONFIG_PROFILE`, `DATABRICKS_WAREHOUSE_ID`). Do not commit parquet files. Grain: `source_record_id=sf_case:{case_id}`; payload stamps `county=San Francisco`, `locality=SF`. Live proof 2026-09-16: 77,406 rows, `ingest_run_id=26a31a80-a06f-4870-ab9e-cda5db38f47f` — see [`docs/bronze/ACCESS_SF_CRIMINAL_HF.md`](../../docs/bronze/ACCESS_SF_CRIMINAL_HF.md).

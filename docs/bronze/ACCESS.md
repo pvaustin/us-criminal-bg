@@ -18,7 +18,7 @@ Research spike, **not** MVP, **not** employer product, **not** for commercial CR
 
 ## San Francisco — Hugging Face `sf_criminal_court` (research named corpus)
 
-Research spike, **isolated from the WI product path**, **not** employer product, **not** for commercial CRA claims. Third-party HF parquet (`cases.parquet`, ~77k named rows including `defendant_name`). CC-BY-NC-4.0. Published-file download only; **do not scrape** SF court sites. **Do not load Cook County.** Details: [`ACCESS_SF_CRIMINAL_HF.md`](ACCESS_SF_CRIMINAL_HF.md). Loader: `bronze/jobs/load_sf_criminal_hf.py`.
+Research spike, **isolated from the WI product path**, **not** employer product, **not** for commercial CRA claims. Third-party HF parquet (`cases.parquet`). Live Bronze load 2026-09-16: **77,406** named rows (`defendant_name` nonempty 77,399/77,406); grain `sf_case:{case_id}`. CC-BY-NC-4.0. Published-file download only; **do not scrape** SF court sites. **Do not load Cook County.** Details: [`ACCESS_SF_CRIMINAL_HF.md`](ACCESS_SF_CRIMINAL_HF.md). Loader: `bronze/jobs/load_sf_criminal_hf.py`.
 
 ## Multi-state
 

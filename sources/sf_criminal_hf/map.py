@@ -30,6 +30,9 @@ PAYLOAD_COLUMNS = (
     "filed_date",
     "scraped_at",
 )
+COUNTY = "San Francisco"
+LOCALITY = "SF"
+SOURCE_RECORD_ID_PREFIX = "sf_case:"
 
 _ALLOWED_NETLOCS = frozenset({"huggingface.co", "www.huggingface.co"})
 _FORBIDDEN_URL_MARKERS = (
@@ -62,25 +65,31 @@ def assert_allowed_cases_parquet_url(url: str) -> None:
         raise ValueError("SF loader downloads cases.parquet only")
 
 
+def _normalize_case_id(case_id: Any) -> str | None:
+    if case_id is None or str(case_id).strip() == "":
+        return None
+    if isinstance(case_id, bool):
+        raise ValueError("case_id must not be a boolean")
+    if isinstance(case_id, float):
+        if not case_id.is_integer():
+            raise ValueError("case_id must be an integer id")
+        return str(int(case_id))
+    if isinstance(case_id, int):
+        return str(case_id)
+    text = str(case_id).strip()
+    if text.endswith(".0") and text.replace(".", "", 1).isdigit():
+        return str(int(float(text)))
+    return text
+
+
 def source_record_id(row: Mapping[str, Any]) -> str:
-    """Prefer case_id; fall back to case_number."""
-    case_id = row.get("case_id")
-    if case_id is not None and str(case_id).strip() != "":
-        if isinstance(case_id, bool):
-            raise ValueError("case_id must not be a boolean")
-        if isinstance(case_id, float):
-            if not case_id.is_integer():
-                raise ValueError("case_id must be an integer id")
-            return str(int(case_id))
-        if isinstance(case_id, int):
-            return str(case_id)
-        text = str(case_id).strip()
-        if text.endswith(".0") and text.replace(".", "", 1).isdigit():
-            return str(int(float(text)))
-        return text
+    """Landed grain: `sf_case:{case_id}`. Fall back to `sf_case:{case_number}`."""
+    case_id = _normalize_case_id(row.get("case_id"))
+    if case_id:
+        return f"{SOURCE_RECORD_ID_PREFIX}{case_id}"
     case_number = row.get("case_number")
     if case_number is not None and str(case_number).strip():
-        return str(case_number).strip()
+        return f"{SOURCE_RECORD_ID_PREFIX}{str(case_number).strip()}"
     raise ValueError("row has neither case_id nor case_number")
 
 
@@ -99,6 +108,8 @@ def _jsonable(value: Any) -> Any:
 
 def payload_dict(row: Mapping[str, Any]) -> dict[str, Any]:
     out = {col: _jsonable(row.get(col)) for col in PAYLOAD_COLUMNS}
+    out["county"] = COUNTY
+    out["locality"] = LOCALITY
     if "defendant_name" not in out:
         out["defendant_name"] = None
     return out
@@ -200,15 +211,17 @@ def court_case_raw_merge_sql(
       named_struct(
         'case_id', case_id,
         'case_number', case_number,
+        'county', 'San Francisco',
         'defendant_name', defendant_name,
         'filed_date', filed_date,
+        'locality', 'SF',
         'scraped_at', scraped_at
       ),
       map('ignoreNullFields', 'false')
     )"""
     source_id_expr = """CASE
-        WHEN case_id IS NOT NULL THEN CAST(case_id AS STRING)
-        ELSE NULLIF(TRIM(CAST(case_number AS STRING)), '')
+        WHEN case_id IS NOT NULL THEN CONCAT('sf_case:', CAST(case_id AS STRING))
+        ELSE CONCAT('sf_case:', NULLIF(TRIM(CAST(case_number AS STRING)), ''))
       END"""
     return f"""
 MERGE INTO us_criminal_bg.bronze.court_case_raw AS t

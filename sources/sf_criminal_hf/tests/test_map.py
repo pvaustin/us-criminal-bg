@@ -39,17 +39,17 @@ SYNTHETIC = {
 
 class SourceRecordIdTests(unittest.TestCase):
     def test_prefers_case_id(self) -> None:
-        self.assertEqual(source_record_id(SYNTHETIC), "1")
+        self.assertEqual(source_record_id(SYNTHETIC), "sf_case:1")
 
     def test_falls_back_to_case_number(self) -> None:
         row = dict(SYNTHETIC)
         row["case_id"] = None
-        self.assertEqual(source_record_id(row), "CRI00000000")
+        self.assertEqual(source_record_id(row), "sf_case:CRI00000000")
 
     def test_string_case_id(self) -> None:
         row = dict(SYNTHETIC)
         row["case_id"] = "  42 "
-        self.assertEqual(source_record_id(row), "42")
+        self.assertEqual(source_record_id(row), "sf_case:42")
 
     def test_blank_raises(self) -> None:
         with self.assertRaises(ValueError):
@@ -62,7 +62,12 @@ class PayloadTests(unittest.TestCase):
         self.assertEqual(payload["defendant_name"], "FIXTURE, SYNTHETIC DEFENDANT")
         self.assertEqual(payload["case_number"], "CRI00000000")
         self.assertEqual(payload["case_id"], 1)
-        self.assertIn("defendant_name", json.loads(payload_json(SYNTHETIC)))
+        self.assertEqual(payload["county"], "San Francisco")
+        self.assertEqual(payload["locality"], "SF")
+        parsed = json.loads(payload_json(SYNTHETIC))
+        self.assertEqual(parsed["defendant_name"], "FIXTURE, SYNTHETIC DEFENDANT")
+        self.assertEqual(parsed["county"], "San Francisco")
+        self.assertEqual(parsed["locality"], "SF")
 
     def test_keeps_defendant_name_key_when_missing(self) -> None:
         row = {"case_number": "CRI00000000", "case_id": 2}
@@ -122,7 +127,9 @@ class SqlBuilderTests(unittest.TestCase):
         self.assertIn("'sf_criminal_hf' AS source_system", sql)
         self.assertIn("'rest_bulk' AS extract_method", sql)
         self.assertIn("defendant_name", sql)
-        self.assertIn("CAST(case_id AS STRING)", sql)
+        self.assertIn("CONCAT('sf_case:', CAST(case_id AS STRING))", sql)
+        self.assertIn("'San Francisco'", sql)
+        self.assertIn("'SF'", sql)
         self.assertIn("FROM parquet.`", sql)
         self.assertNotIn("dbfs:", sql)
         self.assertNotIn("wcca", sql)
@@ -177,6 +184,8 @@ class DryRunCliTests(unittest.TestCase):
         self.assertIn("defendant_name", out)
         self.assertIn("dbfs:/Volumes/", out)
         self.assertIn("MERGE INTO us_criminal_bg.bronze.court_case_raw", out)
+        self.assertIn("sf_case:", out)
+        self.assertIn("San Francisco", out)
         self.assertIn("LIMIT 5", out)
         self.assertNotIn("source_system=wcca", out)
         self.assertNotIn("'WI'", out)
