@@ -50,8 +50,9 @@ Example: `.../state_code=WI/source_system=wcca/ingest_date=2026-09-15/ingest_run
 | `source_system` | State(s) | Access mode (MVP) | Scale path |
 |-----------------|----------|-------------------|------------|
 | `wcca` | WI | Low-volume interactive / manual export from https://wcca.wicourts.gov/ — CAPTCHA expected; **do not bypass** | Paid WCCA REST bulk subscription (~$12,500/yr CCAP agreement) — document only until subscribed |
+| `va_court_data_org` | VA | **Provisional / research-only / access gated.** Not MVP. Public CSVs are anonymized (names, case numbers, DOB removed) — **not** a named corpus; **do not** load into Bronze for name-match. Named export is requestable (free account; journalists / non-profits / research / government; approval required). **Do not scrape** Virginia court websites. See [`ACCESS_VA_COURT_DATA.md`](ACCESS_VA_COURT_DATA.md). | Published zip-CSV (`extract_method`: `rest_bulk`) **if** named export is approved. Spike paused (Prasanth / Charlie). |
 
-Other states: architecture multi-state-ready; **no live scrape targets** until product expands scope.
+Other states: architecture multi-state-ready; **no live scrape targets** until product expands scope. `va_court_data_org` is a reserved identifier only — not a live extractor.
 
 ## `ingest_run` identity
 
@@ -74,7 +75,7 @@ Every Bronze payload table includes at least:
 | `payload_format` | string | e.g. `json`, `html_snapshot` |
 | `payload` | string / variant | Raw / near-raw body |
 | `payload_sha256` | string | Hex digest of canonical payload bytes |
-| `extract_method` | string | `interactive_export` \| `manual_upload` \| `rest_bulk` (future) |
+| `extract_method` | string | `interactive_export` \| `manual_upload` \| `rest_bulk` (future; published zip-CSV download counts as `rest_bulk`, not a court scrape) |
 | `schema_version` | string | Bronze contract version, e.g. `bronze.court_case_raw.v1` |
 
 ### Natural keys (WI / WCCA MVP)
@@ -93,6 +94,7 @@ docs/
   bronze/
     NAMING.md          ← this file (contract)
     ACCESS.md          ← source access modes, ToS, paid REST notes
+    ACCESS_VA_COURT_DATA.md  ← VA research notes (gated; no Bronze load)
 sources/
   wcca/                ← WI WCCA adapter + sample fixtures (no secrets)
 states/
@@ -115,4 +117,5 @@ Bump `schema_version` when reserved columns or payload envelope change. Append a
 
 ### Changelog
 
+- `2026-09-16` — Provisional `va_court_data_org` (VA) research-only / access gated; no Bronze load until named export is approved. See `ACCESS_VA_COURT_DATA.md`.
 - `2026-09-15` — Initial national-first contract (MVP: WCCA → Bronze).

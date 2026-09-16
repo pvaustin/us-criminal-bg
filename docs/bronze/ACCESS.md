@@ -12,6 +12,10 @@
   - Paid REST agreement PDF: https://www.wicourts.gov/courts/resources/docs/RESTagreementpaid.pdf
   - CAPTCHA announcement context: Wisconsin court system news on WCCA CAPTCHA (2018)
 
+## Virginia — virginiacourtdata.org (research notes only)
+
+Research spike, **not** MVP, **not** employer product, **not** for commercial CRA claims. Independent hobby redistribution (not Commonwealth-affiliated). Public CSVs are anonymized. Named export is requestable and gated. **No Bronze load. Do not scrape Virginia court websites.** Details: [`ACCESS_VA_COURT_DATA.md`](ACCESS_VA_COURT_DATA.md).
+
 ## Multi-state
 
 Architecture is national-first (`state_code` dimension). Do not add live extractors for other states until product explicitly expands scope.
