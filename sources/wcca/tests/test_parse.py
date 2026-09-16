@@ -643,6 +643,41 @@ class ParseHtmlSsrPartyTests(unittest.TestCase):
             self.assertIsNotNone(aka.name_last)
             self.assertIsNotNone(aka.name_first)
 
+    def test_aka_strips_trailing_also_from_delimiter(self) -> None:
+        html = (
+            "<html><head><title>2099CF000013 Case Details in Fixture County"
+            "</title></head><body>"
+            "State of Wisconsin vs. FIXTURE, JANE Q "
+            "Filing date 08-08-2099 Case type Criminal Case status Open "
+            "Defendant name FIXTURE, JANE Q Date of birth 01-15-2099 Sex Female "
+            "Address 100 SYNTHETIC WAY FIXTUREVILLE, WI 00000 "
+            "Also known as Name Type Date of birth "
+            "FIXTURE, TJ Also known as Name ALIASFIXTURE, JANE "
+            "Count no. Statute Description Severity Disposition "
+            "1 999.13 Synthetic trailing-also offense Felony"
+            "</body></html>"
+        )
+        result = parse_wcca_bronze_row(
+            source_system="wcca",
+            source_record_id="01:2099CF000013",
+            source_url=(
+                "https://example.test/caseDetail.html?caseNo=2099CF000013&countyNo=1"
+            ),
+            payload_format="html_snapshot",
+            payload=html,
+        )
+        akas = [p for p in result.parties if p.party_role == "aka"]
+        self.assertEqual(
+            [a.raw_name for a in akas], ["FIXTURE, TJ", "ALIASFIXTURE, JANE"]
+        )
+        self.assertEqual(akas[0].name_last, "FIXTURE")
+        self.assertEqual(akas[0].name_first, "TJ")
+        self.assertIsNone(akas[0].name_middle)
+        for aka in akas:
+            self.assertNotEqual((aka.name_middle or "").casefold(), "also")
+            self.assertFalse(aka.raw_name.lower().endswith(" also"))
+            self.assertNotIn("known as", aka.raw_name.lower())
+
 
 class SqlSsrRegexTests(unittest.TestCase):
     """Python stand-ins for the warehouse SQL regexes (Java-compatible subset)."""
@@ -707,10 +742,9 @@ class SqlSsrRegexTests(unittest.TestCase):
         r" Court activit| Warrants| This is not the official| Branch| DA case|"
         r" Attorneys?| JUSTIS| Fingerprint| Responsible| Hearings?| Calendar|$)"
     )
-    SQL_AKA_PERSON_SPLIT = re.compile(r"(?=\b[A-Za-z][A-Za-z.'\-]+,)")
+    SQL_AKA_PERSON_SPLIT = re.compile(r"(?= [A-Za-z][A-Za-z-]+,)")
     SQL_AKA_PERSON = re.compile(
-        r"^([A-Za-z][A-Za-z.'\-]+,\s*[A-Za-z][A-Za-z.'\-]*"
-        r"(?:\s+[A-Za-z][A-Za-z.'\-]*)?)"
+        r"^([A-Za-z][A-Za-z-]+, *[A-Za-z][A-Za-z-]*(?: +[A-Za-z][A-Za-z-]*)?)"
     )
 
     def test_sql_party_regexes_on_collapsed_parties_fixture(self) -> None:
@@ -737,7 +771,7 @@ class SqlSsrRegexTests(unittest.TestCase):
             if not match:
                 continue
             aka_name = re.sub(
-                r"(?i)\s+(AKA|Alias|Maiden|Type)$", "", match.group(1)
+                r"(?i)\s+(AKA|Alias|Maiden|Type|Also)$", "", match.group(1)
             ).strip()
             if aka_name and len(aka_name) <= 80:
                 akas.append(aka_name)
@@ -775,7 +809,7 @@ class SqlSsrRegexTests(unittest.TestCase):
             if match:
                 akas.append(
                     re.sub(
-                        r"(?i)\s+(AKA|Alias|Maiden|Type)$", "", match.group(1)
+                        r"(?i)\s+(AKA|Alias|Maiden|Type|Also)$", "", match.group(1)
                     ).strip()
                 )
         self.assertEqual(

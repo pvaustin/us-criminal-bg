@@ -279,7 +279,7 @@ extracted AS (
       trim(
         regexp_extract(
           s.ssr_text,
-          '(?i)(?:^| )Sex\\s*:?\\s*(Male|Female|Unknown)\\b',
+          '(?i)Sex\\s*:?\\s*(Male|Female|Unknown)(?= Race| Address| Also known as| Date of birth| Charges| Count no\\.| Branch| DA case|$)',
           1
         )
       ),
@@ -312,19 +312,19 @@ extracted AS (
               ),
               ''
             ),
-            '(?=\\b[A-Za-z][A-Za-z.\\'\\-]+,)'
+            '(?= [A-Za-z][A-Za-z-]+,)'
           ),
-          x -> trim(x) RLIKE '^[A-Za-z][A-Za-z.\\'\\-]+,\\s*[A-Za-z]'
-            AND NOT lower(trim(x)) RLIKE '^(name|type|date)\\b'
+          x -> trim(x) RLIKE '^[A-Za-z][A-Za-z-]+, *[A-Za-z]'
+            AND NOT lower(trim(x)) RLIKE '^(name|type|date)( |$)'
         ),
         x -> trim(
           regexp_replace(
             regexp_extract(
               trim(x),
-              '^([A-Za-z][A-Za-z.\\'\\-]+,\\s*[A-Za-z][A-Za-z.\\'\\-]*(?:\\s+[A-Za-z][A-Za-z.\\'\\-]*)?)',
+              '^([A-Za-z][A-Za-z-]+, *[A-Za-z][A-Za-z-]*(?: +[A-Za-z][A-Za-z-]*)?)',
               1
             ),
-            '(?i)\\s+(AKA|Alias|Maiden|Type)$',
+            '(?i) +(AKA|Alias|Maiden|Type|Also)$',
             ''
           )
         )
@@ -748,8 +748,8 @@ unioned AS (
   WHERE trim(x.aka_raw) <> ''
     AND lower(trim(x.aka_raw)) <> lower(coalesce(b.defendant_raw, ''))
     AND lower(trim(x.aka_raw)) <> lower(coalesce(b.plaintiff_raw, ''))
-    AND trim(x.aka_raw) RLIKE '^[A-Za-z].*,\\s*[A-Za-z]'
-    AND NOT lower(trim(x.aka_raw)) RLIKE '^(name|type|date)\\b'
+    AND trim(x.aka_raw) RLIKE '^[A-Za-z].*, *[A-Za-z]'
+    AND NOT lower(trim(x.aka_raw)) RLIKE '^(name|type|date)( |$)'
     AND length(trim(x.aka_raw)) <= 80
 )
 SELECT

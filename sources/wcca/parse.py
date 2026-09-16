@@ -180,12 +180,17 @@ AKA_SECTION_RE = re.compile(
 # "Name Type Date of birth FIXTURE, JANE" does not swallow the header.
 AKA_PERSON_FIND_RE = re.compile(
     r"\b([A-Za-z][A-Za-z.'\-]+),\s*([A-Za-z][A-Za-z.'-]*)"
-    r"(?:\s+([A-Za-z][A-Za-z.'-]*))?"
+    r"(?:\s+(?!Also\b|AKA\b|Alias\b|Maiden\b|Type\b)([A-Za-z][A-Za-z.'-]*))?"
 )
 _PARTY_STOP_SPLIT = re.compile(
     rf"(?i)\s+(?:Also known as|{_PARTY_STOP_CORE})"
 )
-AKA_TYPE_TOKENS = frozenset({"aka", "alias", "maiden", "type", "nickname"})
+AKA_TRAILING_TOKEN_RE = re.compile(
+    r"(?i)(?:\s+|,)+(also known as|also|aka|alias|maiden|type)\s*$"
+)
+AKA_TYPE_TOKENS = frozenset(
+    {"aka", "alias", "maiden", "type", "nickname", "also"}
+)
 AKA_SKIP_LAST = frozenset(
     {"name", "type", "date", "birth", "aka", "alias", "also", "known"}
 )
@@ -725,15 +730,34 @@ def _trim_party_stop(value: str | None) -> str | None:
     return trimmed or None
 
 
+def _strip_aka_trailing_tokens(raw_name: str | None) -> str | None:
+    """Drop delimiter leftovers (`Also`, `AKA`, `Alias`) from aka names."""
+    text = _collapse_ws(raw_name)
+    if text is None:
+        return None
+    while True:
+        stripped = AKA_TRAILING_TOKEN_RE.sub("", text).strip(" ,")
+        if stripped == text:
+            break
+        text = stripped
+    return text or None
+
+
 def _canonical_aka_name(raw_name: str) -> str | None:
-    last, first, middle = split_person_name(raw_name)
+    cleaned = _strip_aka_trailing_tokens(raw_name)
+    if cleaned is None:
+        return None
+    last, first, middle = split_person_name(cleaned)
     if last is None or first is None:
         return None
     if last.casefold() in AKA_SKIP_LAST:
         return None
-    if middle and middle.casefold() in AKA_TYPE_TOKENS:
-        middle = None
+    if middle:
+        middle = _strip_aka_trailing_tokens(middle)
+        if middle and middle.casefold() in AKA_TYPE_TOKENS:
+            middle = None
     assembled = f"{last}, {first}" + (f" {middle}" if middle else "")
+    assembled = _strip_aka_trailing_tokens(assembled) or assembled
     return assembled
 
 
@@ -778,7 +802,7 @@ def _aka_names(section: str | None) -> list[str]:
         if middle and middle.casefold() in AKA_TYPE_TOKENS:
             middle = None
         assembled = f"{last}, {first}" + (f" {middle}" if middle else "")
-        add(assembled)
+        add(_strip_aka_trailing_tokens(assembled))
     return names
 
 
@@ -794,6 +818,15 @@ def _build_party(
     extra_flags: tuple[str, ...] = (),
 ) -> PartyRow:
     last, first, middle = split_person_name(raw_name)
+    if role == "aka":
+        stripped = _strip_aka_trailing_tokens(raw_name)
+        if stripped:
+            raw_name = stripped
+        last, first, middle = split_person_name(raw_name)
+        if middle and middle.casefold() in AKA_TYPE_TOKENS:
+            middle = None
+            if last and first:
+                raw_name = f"{last}, {first}"
     flags = [flag for flag in extra_flags if flag]
     if last is None and first is None and not is_org_party_name(raw_name):
         flags.append("ambiguous_name_parts")
