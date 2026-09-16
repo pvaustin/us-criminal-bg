@@ -12,8 +12,11 @@ This package must never scrape court sites, download Virginia anonymized CSVs, o
 ## Layout
 
 - `map.py` — identifiers, payload JSON, volume paths, SQL builders
-- `tests/` — synthetic rows only (never claimed as real court records)
+- `parse_party.py` — Silver `court_party` defendant parse from Bronze JSON (research; no scrape)
+- `tests/` — synthetic rows / names only (never claimed as real court records)
 
 ```bash
 python3 -m unittest discover -s sources/sf_criminal_hf/tests -v
 ```
+
+Silver transform (scoped MERGE; does not delete WI parties): [`docs/silver/SF_RESEARCH.md`](../../docs/silver/SF_RESEARCH.md).

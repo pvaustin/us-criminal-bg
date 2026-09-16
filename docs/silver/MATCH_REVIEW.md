@@ -9,6 +9,8 @@ This is a design sketch so Uma can build a review queue against party facts Silv
 
 AKA rows are **one person-name each** (`Last, First[ M]`); `address_raw` stops at ZIP / before Branch ID. See `docs/silver/WCCA_HTML_SSR.md`.
 
+SF HF research defendants (`source_system=sf_criminal_hf`, `state_code=CA`) may appear on the same `court_party` table for **name-match experiments**. They always lack DOB (`dob_absent` → **review**). That corpus is **not** the WI employer product path — see [`SF_RESEARCH.md`](SF_RESEARCH.md). Do not treat an SF experiment hit as a hire signal.
+
 ## Subject inputs
 
 | Field | Required | Rule |

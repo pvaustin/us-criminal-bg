@@ -96,5 +96,6 @@ Isolation counts **after** this load (WI path untouched; Cook not loaded):
 ## Status
 
 - Named `court_party` research corpus **is landed** (proof above). **Isolate from WI employer MVP** (WCCA CAPTCHA / manual_upload / paid REST unchanged).
+- Silver party sketch (parser + scoped MERGE, warehouse apply coordinator-side): [`docs/silver/SF_RESEARCH.md`](../silver/SF_RESEARCH.md).
 - VA named export remains a separate gated path ([`ACCESS_VA_COURT_DATA.md`](ACCESS_VA_COURT_DATA.md)); Prasanth requests that account; **no** anonymized VA load.
 - Cook County is **out of scope** (`cook_sao_open` row count 0 after this load).

@@ -4,15 +4,15 @@
 **Table:** `us_criminal_bg.silver.court_party`  
 **Schema version:** `silver.court_party.v1`  
 **DDL:** [`silver/schemas/court_party.sql`](../../silver/schemas/court_party.sql)  
-**Parser:** [`sources/wcca/parse.py`](../../sources/wcca/parse.py) (`parse_parties_from_ssr_text`)  
-**Transforms:** [`silver/transforms/court_case.sql`](../../silver/transforms/court_case.sql) (Spark SQL) and [`silver/transforms/court_case.py`](../../silver/transforms/court_case.py) / [`map_court_case.py`](../../silver/transforms/map_court_case.py) (Python)  
-**Contracts:** [`NAMING.md`](NAMING.md) · [`WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md) · [`MATCH_REVIEW.md`](MATCH_REVIEW.md)
+**Parsers:** [`sources/wcca/parse.py`](../../sources/wcca/parse.py) (`parse_parties_from_ssr_text`) · [`sources/sf_criminal_hf/parse_party.py`](../../sources/sf_criminal_hf/parse_party.py) (research JSON defendants)  
+**Transforms:** WCCA — [`silver/transforms/court_case.sql`](../../silver/transforms/court_case.sql) / [`court_case.py`](../../silver/transforms/court_case.py). SF research (parallel, does not delete WI) — [`silver/transforms/court_party_sf_criminal_hf.sql`](../../silver/transforms/court_party_sf_criminal_hf.sql) / [`court_party_sf_criminal_hf.py`](../../silver/transforms/court_party_sf_criminal_hf.py)  
+**Contracts:** [`NAMING.md`](NAMING.md) · [`WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md) · [`MATCH_REVIEW.md`](MATCH_REVIEW.md) · [`SF_RESEARCH.md`](SF_RESEARCH.md)
 
-Analytics-ready **party facts** extracted from already-landed Bronze `html_snapshot` HTML. Type-1 current row. Not a person graph, not a hire decision.
+Analytics-ready **party facts** extracted from already-landed Bronze (WCCA `html_snapshot` HTML, plus a research-only SF HF JSON path). Type-1 current row. Not a person graph, not a hire decision.
 
 ## Purpose / non-goals
 
-**Purpose.** One current Silver row per party role + ordinal on a court case, parsed from WCCA HTML SSR (and caption) so downstream analytics and Uma’s review queue can join parties to `court_case` / `court_charge` without reading Bronze HTML.
+**Purpose.** One current Silver row per party role + ordinal on a court case, parsed from already-landed Bronze so downstream analytics and Uma’s review queue can join parties without re-reading payloads. WCCA HTML SSR (and caption) is the WI product path. SF HF JSON defendants are a **research-only** parallel path ([`SF_RESEARCH.md`](SF_RESEARCH.md)) — not the employer MVP.
 
 **Non-goals (explicit):**
 
@@ -38,13 +38,13 @@ Re-running a case upserts matching role+ordinal rows and **deletes** role+ordina
 
 | Column | Type | Null | Meaning |
 |--------|------|------|---------|
-| `source_system` | `STRING` | NOT NULL | MERGE key. MVP: `wcca` |
-| `state_code` | `STRING` | NOT NULL | MERGE key. MVP: `WI` |
-| `source_record_id` | `STRING` | NOT NULL | MERGE key. WCCA: `{countyNo}:{caseNo}` |
+| `source_system` | `STRING` | NOT NULL | MERGE key. WI MVP: `wcca`. Research: `sf_criminal_hf` |
+| `state_code` | `STRING` | NOT NULL | MERGE key. WI MVP: `WI`. Research: `CA` |
+| `source_record_id` | `STRING` | NOT NULL | MERGE key. WCCA: `{countyNo}:{caseNo}`. SF research: `sf_case:{case_id}` |
 | `party_role` | `STRING` | NOT NULL | MERGE key. `defendant` \| `plaintiff` \| `aka` \| `other` |
 | `party_ordinal` | `INT` | NOT NULL | MERGE key. 1-based, stable **within role** for this payload (document order) |
 | `raw_name` | `STRING` | NOT NULL | Source name string; required on every emitted row |
-| `name_last` | `STRING` | null | Split only when `Last, First[ Middle…]` is reliable |
+| `name_last` | `STRING` | null | WCCA: split only when `Last, First[ Middle…]` is reliable. SF research: also first/last space tokens |
 | `name_first` | `STRING` | null | Same |
 | `name_middle` | `STRING` | null | Same; trailing AKA-type tokens stripped on `aka` rows |
 | `dob` | `DATE` | null | Labeled `Date of birth` only |
@@ -57,7 +57,7 @@ Re-running a case upserts matching role+ordinal rows and **deletes** role+ordina
 | `silver_schema_version` | `STRING` | NOT NULL | `silver.court_party.v1` |
 | `transformed_at` | `TIMESTAMP` | NOT NULL | Silver write time |
 | `transform_run_id` | `STRING` | NOT NULL | FK-ish to `silver.transform_run` |
-| `payload_parse_status` | `STRING` | NOT NULL | `html_ssr_v1` for labeled / caption-plaintiff rows; `html_ssr_partial` when defendant name is caption fallback |
+| `payload_parse_status` | `STRING` | NOT NULL | WCCA: `html_ssr_v1` for labeled / caption-plaintiff rows; `html_ssr_partial` when defendant name is caption fallback. SF research: `json_cases_v1` |
 | `dq_flags` | `ARRAY<STRING>` | NOT NULL | Sorted flag names; empty array if clean (never SQL `NULL`) |
 
 Race is **not** a column.
@@ -66,8 +66,9 @@ Race is **not** a column.
 
 | Flag | When |
 |------|------|
-| `ambiguous_name_parts` | `raw_name` present but `Last, First` split was not reliable (omitted on organizational plaintiff `State of Wisconsin`) |
-| `missing_dob` | **Defendant** row with no labeled `Date of birth` |
+| `ambiguous_name_parts` | `raw_name` present but name-part split was not reliable (WCCA: omitted on organizational plaintiff `State of Wisconsin`. SF: single-token, unreliable comma, or 4+ space tokens) |
+| `missing_dob` | **Defendant** row with no labeled `Date of birth` (always on SF HF defendants — corpus has no DOB) |
+| `name_unparsed` | SF research: `raw_name` present but first/last parts left null (single token or unreliable comma). Not used on WCCA rows |
 | `defendant_from_caption` | Defendant `raw_name` taken from caption `vs.` because `Defendant name` was absent |
 | `dob_unparsed` | `Date of birth` label present but token was not a valid date (Python path) |
 
@@ -96,16 +97,29 @@ Input: stripped WCCA HTML SSR text plus caption. No invented facts. **Honest nul
 
 Prefer the **Python** job for party name-part / aka DQ. Spark SQL is a warehouse stand-in: comma-split name parts, same plaintiff / defendant / aka cores, weaker aka hygiene.
 
+## San Francisco research corpus (`sf_criminal_hf`)
+
+Parallel path. Full note: [`SF_RESEARCH.md`](SF_RESEARCH.md). Isolated from WI: the SF transform filters Bronze to `source_system='sf_criminal_hf'` and `state_code='CA'`, and DELETE is additionally gated on those literals so existing `wcca` / `WI` party rows (live grain `51:2026CF000028`) are not removed.
+
+| Role | Source | Row grain | Attributes |
+|------|--------|-----------|------------|
+| **defendant** | JSON `defendant_name` | Ordinal **1** when nonempty after trim; **skip** blank names (no invented party) | `raw_name` from payload. Comma → `Last, First[ Middle…]`. Else first/last tokens + joined middle. `dob` / `sex` / `address_raw` **null**. `payload_parse_status=json_cases_v1` |
+| **plaintiff** / **aka** | — | Not emitted | Corpus has no plaintiff or AKA fields |
+
+Name-shape note (identifier-only; no live names in git): almost all source strings are space-separated `FIRST [MIDDLE…] LAST` (all-caps). WCCA `Last, First` does **not** dominate. Flag `ambiguous_name_parts` on single-token and 4+ token heuristics. Gaps vs WCCA: no DOB, AKA, sex, address, plaintiff, or charges in `cases.parquet`.
+
+This path does **not** write `court_case` / `court_charge`. It is **not** employer-product copy. Coordinator applies the SF SQL/Python job after this PR.
+
 ## Lineage
 
-`payload` is **not** copied into Silver. Join back to `us_criminal_bg.bronze.court_case_raw` with the case natural key and/or `ingest_run_id` + `payload_sha256`. Party lineage matches the **parent `court_case` row** used for the run.
+`payload` is **not** copied into Silver. Join back to `us_criminal_bg.bronze.court_case_raw` with the case natural key and/or `ingest_run_id` + `payload_sha256`. WCCA party lineage matches the **parent `court_case` row** used for that run. SF research parties copy lineage from the Bronze case row directly (this path does not write `court_case`).
 
 | Column | Source | Notes |
 |--------|--------|-------|
 | `ingest_run_id` | `bronze.court_case_raw.ingest_run_id` | FK-ish to `bronze.ingest_run` |
 | `ingested_at` | `bronze.court_case_raw.ingested_at` | Bronze write time, not Silver transform time |
-| `source_system` | Bronze / MERGE key | MVP `wcca` |
-| `state_code` | Bronze / MERGE key | MVP `WI` |
+| `source_system` | Bronze / MERGE key | `wcca` (WI MVP) or `sf_criminal_hf` (CA research) |
+| `state_code` | Bronze / MERGE key | `WI` or `CA` |
 | `source_record_id` | Bronze / MERGE key | e.g. `51:2026CF000028` |
 | `payload_sha256` | `bronze.court_case_raw.payload_sha256` | Integrity / payload join-back |
 | `bronze_schema_version` | Bronze `schema_version` | Renamed to avoid colliding with `silver_schema_version` |
@@ -176,6 +190,7 @@ Later human/suggestion rows belong in append-only `us_criminal_bg.silver.match_d
 |------|--------|
 | Create `us_criminal_bg.silver.match_decision` | Named + column sketch in [`MATCH_REVIEW.md`](MATCH_REVIEW.md). Append-only. **Not created.** Coordinator may add later; do not treat a UI-only store as the system of record |
 | Charge `modifier_*` on the SQL path | Python fills `modifier_statute` / `modifier_text` from `Modifier:` lines. [`court_case.sql`](../../silver/transforms/court_case.sql) leaves them **null** |
+| SF HF research parties | Dedicated transform [`court_party_sf_criminal_hf.sql`](../../silver/transforms/court_party_sf_criminal_hf.sql). Gaps / experiment-only: [`SF_RESEARCH.md`](SF_RESEARCH.md). Warehouse apply coordinator-side |
 | SQL vs Python party DQ | SQL comma-splits name parts and uses a `Last,` lookahead for aka. Prefer Python for aka header collapse, trailing-`Also` strip, and `dob_unparsed` |
 | Extra labeled `Defendant name` | Python can emit defendant ordinal 2+; SQL takes the first labeled name only |
 | `other` role | Reserved in the enum; WCCA criminal captions do not emit it |
