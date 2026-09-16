@@ -58,7 +58,7 @@ Person **match scores** remain out of scope for Silver tables. `court_party` is 
 ### `court_party`
 
 - **Natural key:** `(source_system, state_code, source_record_id, party_role, party_ordinal)` — type-1 MERGE.
-- `party_role` is one of `defendant`, `plaintiff`, `aka`, `other`. WI criminal captions typically yield **plaintiff 1** (`State of Wisconsin`) and **defendant 1**; `aka` ordinals follow **document order** of also-known-as name lines in this payload (not a source-assigned party id).
+- `party_role` is one of `defendant`, `plaintiff`, `aka`, `other`. WI criminal captions typically yield **plaintiff 1** (`State of Wisconsin`) and **defendant 1**; `aka` ordinals follow **document order** of also-known-as **person names** (`Last, First[ M]`) in this payload — not the `Name Type Date of birth` header and not court-activity text.
 - Re-running a case replaces matching role+ordinal rows and **deletes** role+ordinals that disappeared for that case in the current Bronze payload (same stale-key pattern as `court_charge`).
 - `raw_name` is required on emitted rows. `name_last` / `name_first` / `name_middle` are filled only for reliable `Last, First[ Middle…]` tokens; otherwise null (`ambiguous_name_parts`). Organizational plaintiff names stay unsplit.
 - `dob` is DATE only from an explicit `Date of birth` label. Never from filing date, caption, or inference. `sex` and `address_raw` only from those labels. Race is not a column.

@@ -289,7 +289,7 @@ extracted AS (
       trim(
         regexp_extract(
           s.ssr_text,
-          '(?i)Address\\s*:?\\s*(.+?)(?= Also known as| Charges| Count no\\.| Court records| Warrants| This is not the official| Phone| Prosecut| Defense| Responsible| Race| Sex| Date of birth|$)',
+          '(?i)Address\\s*:?\\s*(.+?)(?= Also known as| Charges| Count no\\.| Court records| Court activit| Warrants| This is not the official| Phone| Prosecut| Defense| Responsible| Race| Sex| Date of birth| Branch| DA case| Attorneys?| JUSTIS| Fingerprint| Hearings?| Calendar|$)',
           1
         )
       ),
@@ -304,7 +304,7 @@ extracted AS (
                 trim(
                   regexp_extract(
                     s.ssr_text,
-                    '(?i)Also known as\\s+(.*?)(?= Charges| Count no\\.| Court records| Warrants| This is not the official|$)',
+                    '(?i)Also known as\\s+(.*?)(?= Charges| Count no\\.| Court records| Court activit| Warrants| This is not the official| Branch| DA case| Attorneys?| JUSTIS| Fingerprint| Responsible| Hearings?| Calendar|$)',
                     1
                   )
                 ),
@@ -312,13 +312,29 @@ extracted AS (
               ),
               ''
             ),
-            '(?i)(?=Name )'
+            '(?=\\b[A-Za-z][A-Za-z.\\'\\-]+,)'
           ),
-          x -> trim(x) <> ''
+          x -> trim(x) RLIKE '^[A-Za-z][A-Za-z.\\'\\-]+,\\s*[A-Za-z]'
+            AND NOT lower(trim(x)) RLIKE '^(name|type|date)\\b'
         ),
-        x -> trim(regexp_replace(trim(x), '(?i)^Name\\s+', ''))
+        x -> trim(
+          regexp_replace(
+            regexp_extract(
+              trim(x),
+              '^([A-Za-z][A-Za-z.\\'\\-]+,\\s*[A-Za-z][A-Za-z.\\'\\-]*(?:\\s+[A-Za-z][A-Za-z.\\'\\-]*)?)',
+              1
+            ),
+            '(?i)\\s+(AKA|Alias|Maiden|Type)$',
+            ''
+          )
+        )
       ),
-      x -> x IS NOT NULL AND trim(x) <> '' AND lower(trim(x)) NOT IN ('name', 'also known as')
+      x -> x IS NOT NULL AND trim(x) <> ''
+       AND lower(trim(x)) NOT IN ('name', 'also known as', 'type', 'date of birth')
+       AND NOT lower(x) LIKE '%date of birth%'
+       AND NOT lower(x) LIKE '%branch id%'
+       AND length(x) <= 80
+       AND size(split(x, ' ')) <= 6
     ) AS aka_raws
   FROM ssr s
 )
@@ -732,6 +748,9 @@ unioned AS (
   WHERE trim(x.aka_raw) <> ''
     AND lower(trim(x.aka_raw)) <> lower(coalesce(b.defendant_raw, ''))
     AND lower(trim(x.aka_raw)) <> lower(coalesce(b.plaintiff_raw, ''))
+    AND trim(x.aka_raw) RLIKE '^[A-Za-z].*,\\s*[A-Za-z]'
+    AND NOT lower(trim(x.aka_raw)) RLIKE '^(name|type|date)\\b'
+    AND length(trim(x.aka_raw)) <= 80
 )
 SELECT
   u.source_system,

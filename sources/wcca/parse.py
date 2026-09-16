@@ -158,24 +158,36 @@ SEX_LABEL_RE = re.compile(
     r"\s+Charges\b|\s+Count no\.|\s+Defendant\b|$|\s)",
     re.IGNORECASE,
 )
+# Headings that end defendant address / aka blocks on live WCCA SSR.
+_PARTY_STOP_CORE = (
+    r"Charges\b|Count no\.|Court records?\b|Court activit|"
+    r"Warrants?\b|Judgments?\b|This is not the official\b|"
+    r"Phone\b|Attorneys?\b|Prosecut|Defense\b|Responsible\b|"
+    r"Branch(?:\s+ID)?\b|DA case\b|JUSTIS\b|Fingerprint\b|"
+    r"Hearings?\b|Calendar\b"
+)
 ADDRESS_LABEL_RE = re.compile(
-    r"Address\s*:?\s*(.+?)(?="
-    r"\s+Also known as\b|\s+Charges\b|\s+Count no\.|\s+Court records?\b|"
-    r"\s+Warrants?\b|\s+Judgments?\b|\s+This is not the official\b|"
-    r"\s+Phone\b|\s+Attorney\b|\s+Prosecut|\s+Defense\b|\s+Responsible\b|"
-    r"\s+Race\b|\s+Sex\b|\s+Date of birth\b|$)",
+    rf"Address\s*:?\s*(.+?)(?="
+    rf"\s+Also known as\b|\s+(?:{_PARTY_STOP_CORE})|"
+    rf"\s+Race\b|\s+Sex\b|\s+Date of birth\b|$)",
     re.IGNORECASE,
 )
 AKA_SECTION_RE = re.compile(
-    r"Also known as\s*:?\s*(.+?)(?="
-    r"\s+Charges\b|\s+Count no\.|\s+Court records?\b|\s+Warrants?\b|"
-    r"\s+Judgments?\b|\s+This is not the official\b|\s+Prosecut|"
-    r"\s+Defense\b|\s+Responsible\b|$)",
+    rf"Also known as\s*:?\s*(.+?)(?=\s+(?:{_PARTY_STOP_CORE})|$)",
     re.IGNORECASE,
 )
-AKA_NAME_ITEM_RE = re.compile(
-    r"(?:^|\s)Name\s+(.+?)(?=\s+Name\b|$)",
-    re.IGNORECASE,
+# Last, First[ Middle] inside an aka section. Last is a single token so
+# "Name Type Date of birth FIXTURE, JANE" does not swallow the header.
+AKA_PERSON_FIND_RE = re.compile(
+    r"\b([A-Za-z][A-Za-z.'\-]+),\s*([A-Za-z][A-Za-z.'-]*)"
+    r"(?:\s+([A-Za-z][A-Za-z.'-]*))?"
+)
+_PARTY_STOP_SPLIT = re.compile(
+    rf"(?i)\s+(?:Also known as|{_PARTY_STOP_CORE})"
+)
+AKA_TYPE_TOKENS = frozenset({"aka", "alias", "maiden", "type", "nickname"})
+AKA_SKIP_LAST = frozenset(
+    {"name", "type", "date", "birth", "aka", "alias", "also", "known"}
 )
 CAPTION_SIDES_RE = re.compile(
     r"^(State of Wisconsin)\s+vs\.?\s+(.+)$",
@@ -704,25 +716,70 @@ def _looks_like_swallowed_charges(value: str | None) -> bool:
     return SWALLOWED_CHARGE_RE.search(collapsed) is not None
 
 
-def _aka_names(section: str | None) -> list[str]:
-    collapsed = _collapse_ws(section)
+def _trim_party_stop(value: str | None) -> str | None:
+    """Cut address/aka text at the next known heading (defense in depth)."""
+    raw = _collapse_ws(value)
+    if raw is None:
+        return None
+    trimmed = _PARTY_STOP_SPLIT.split(raw, maxsplit=1)[0].strip()
+    return trimmed or None
+
+
+def _canonical_aka_name(raw_name: str) -> str | None:
+    last, first, middle = split_person_name(raw_name)
+    if last is None or first is None:
+        return None
+    if last.casefold() in AKA_SKIP_LAST:
+        return None
+    if middle and middle.casefold() in AKA_TYPE_TOKENS:
+        middle = None
+    assembled = f"{last}, {first}" + (f" {middle}" if middle else "")
+    return assembled
+
+
+def _is_aka_person_name(raw: str | None) -> bool:
+    collapsed = _collapse_ws(raw)
     if collapsed is None:
+        return False
+    lowered = collapsed.casefold()
+    if lowered.startswith("type ") or lowered.startswith("name type"):
+        return False
+    if "date of birth" in lowered or "branch id" in lowered:
+        return False
+    if _looks_like_swallowed_charges(collapsed):
+        return False
+    if len(collapsed) > 80 or len(collapsed.split()) > 6:
+        return False
+    return _canonical_aka_name(collapsed) is not None
+
+
+def _aka_names(section: str | None) -> list[str]:
+    """One clean Last, First[ M] per aka person. Never the table header or calendar."""
+    if not section:
         return []
     names: list[str] = []
-    for match in AKA_NAME_ITEM_RE.finditer(" " + collapsed):
-        name = _collapse_ws(match.group(1))
-        if name and name.lower() != "name" and not _looks_like_swallowed_charges(name):
-            names.append(name)
-    if names:
-        return names
-    leftover = _collapse_ws(re.sub(r"(?i)^name\s+", "", collapsed))
-    if (
-        leftover
-        and leftover.lower() not in {"name", "also known as"}
-        and not _looks_like_swallowed_charges(leftover)
-    ):
-        return [leftover]
-    return []
+    seen: set[str] = set()
+
+    def add(raw: str | None) -> None:
+        canonical = _canonical_aka_name(raw or "")
+        if canonical is None or not _is_aka_person_name(canonical):
+            return
+        key = canonical.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        names.append(canonical)
+
+    for line in section.splitlines():
+        add(_collapse_ws(line))
+    collapsed = _collapse_ws(section) or ""
+    for match in AKA_PERSON_FIND_RE.finditer(collapsed):
+        last, first, middle = match.group(1), match.group(2), match.group(3)
+        if middle and middle.casefold() in AKA_TYPE_TOKENS:
+            middle = None
+        assembled = f"{last}, {first}" + (f" {middle}" if middle else "")
+        add(assembled)
+    return names
 
 
 def _build_party(
@@ -808,7 +865,7 @@ def parse_parties_from_ssr_text(
 
     address_raw = None
     for blob in (raw_text, collapsed):
-        addr = _first_group(ADDRESS_LABEL_RE, blob)
+        addr = _trim_party_stop(_first_group(ADDRESS_LABEL_RE, blob))
         if addr and not _looks_like_swallowed_charges(addr):
             address_raw = addr
             break
@@ -869,6 +926,9 @@ def parse_parties_from_ssr_text(
     aka_ordinal = 1
     for aka in aka_list:
         if aka.casefold() in skip:
+            continue
+        last, first, _middle = split_person_name(aka)
+        if last is None or first is None:
             continue
         rows.append(
             _build_party(

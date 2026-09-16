@@ -27,8 +27,8 @@ JSON `application/json` script tags and well-known preload assignments are still
 | `court_party` defendant | Labeled `Defendant name {Last, First M}` | `party_ordinal=1`. If the label is missing, caption name after `vs.` is used and flagged `defendant_from_caption`. |
 | `dob` | Labeled `Date of birth MM-DD-YYYY` | DATE only when that label parses. Never from `Filing date`. |
 | `sex` | Labeled `Sex Male\|Female\|Unknown` | Null if unlabeled. |
-| `address_raw` | Labeled `Address {text}` | Collapsed source text; not split into street/city/zip. |
-| `court_party` aka | `Also known as` then `Name {Last, First…}` lines | `party_ordinal` is document order. Duplicate of the defendant `raw_name` is skipped. |
+| `address_raw` | Labeled `Address {text}` | Collapsed street/city/ZIP only. Stops at Branch ID, DA case number, Charges, Responsible, Attorneys, JUSTIS, Fingerprint, Also known as. |
+| `court_party` aka | `Also known as` then `Last, First` person lines | One row per person name in document order. Skips the `Name Type Date of birth` header and court-activity / JUSTIS / Fingerprint text. Duplicate of the defendant `raw_name` is skipped. |
 | `case_type` | **Not** the SSR `Case type Criminal` label | Still the CCAP two-letter code derived from `case_number` (e.g. `CF`). |
 
 `payload_parse_status = html_ssr_v1` only when **caption**, **filed_date**, and **≥1 charge** all parse. Anything less from SSR is `html_ssr_partial`. Empty shells stay `identifiers_only`.

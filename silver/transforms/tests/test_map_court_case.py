@@ -114,6 +114,8 @@ class MapCourtCaseTests(unittest.TestCase):
         self.assertEqual(defendant["raw_name"], "FIXTURE, JANE Q")
         self.assertEqual(defendant["dob"], date(2099, 1, 15))
         self.assertEqual(defendant["sex"], "Female")
+        self.assertNotIn("Branch ID", defendant["address_raw"] or "")
+        self.assertNotIn("DA case", defendant["address_raw"] or "")
         self.assertEqual(defendant["silver_schema_version"], "silver.court_party.v1")
         self.assertEqual(defendant["ingest_run_id"], bronze["ingest_run_id"])
         self.assertEqual(defendant["payload_sha256"], "abc123")
