@@ -13,9 +13,8 @@ Does **not** invent court cases or charges. Does **not** treat
 `system:suggestion` queue cards as link labels. Does **not** write
 `match_decision` or wire Uma. Human review stays required.
 
-MLflow experiment: `us_criminal_bg_name_match`
-  workspace path: `/Shared/us_criminal_bg_name_match`
-  optional UC:    `us_criminal_bg.ml.us_criminal_bg_name_match`
+MLflow experiment (physical path): `/Shared/us_criminal_bg_name_match`
+Logical alias / tag (Charlie): `us_criminal_bg_name_match` — not a set_experiment name
 Run tag: `sf_name_match_v1`
 
 Logs rule-baseline metrics and model metrics in the **same** experiment
@@ -39,13 +38,14 @@ if str(REPO_ROOT) not in sys.path:
 
 from ml.name_match.baseline import rule_rank_scores, rule_review_mask  # noqa: E402
 from ml.name_match.constants import (  # noqa: E402
-    EXPERIMENT_NAME,
+    EXPERIMENT_PATH,
     FEATURE_NAMES,
+    LOGICAL_EXPERIMENT_NAME,
     RUN_TAG,
     SOURCE_SYSTEM,
     STATE_CODE,
     UC_EXPERIMENT_NAME,
-    WORKSPACE_EXPERIMENT_PATH,
+    resolve_experiment_path,
 )
 from ml.name_match.dataset import (  # noqa: E402
     LabelInventory,
@@ -93,24 +93,26 @@ def _start_mlflow(
     except ImportError:
         print("name_match: mlflow not installed; metrics will print only")
         return None
-    tried = []
-    for name in (
-        experiment_name,
-        WORKSPACE_EXPERIMENT_PATH,
-        EXPERIMENT_NAME,
-        UC_EXPERIMENT_NAME,
-    ):
-        if not name or name in tried:
-            continue
-        tried.append(name)
-        try:
-            mlflow.set_experiment(name)
-            print("name_match: mlflow experiment =", name)
-            return mlflow
-        except Exception as exc:  # noqa: BLE001
-            print("name_match: set_experiment failed for", name, ":", exc)
-    print("name_match: could not set MLflow experiment; logging disabled")
-    return None
+    try:
+        path = resolve_experiment_path(experiment_name)
+    except ValueError as exc:
+        print("name_match:", exc)
+        return None
+    try:
+        mlflow.set_experiment(path)
+        print("name_match: mlflow experiment =", path)
+        print("name_match: logical alias =", LOGICAL_EXPERIMENT_NAME)
+        return mlflow
+    except Exception as exc:  # noqa: BLE001
+        print(
+            "name_match: set_experiment failed for",
+            path,
+            ":",
+            exc,
+            "; coordinator may pre-create",
+            EXPERIMENT_PATH,
+        )
+        return None
 
 
 def _log_params(mlflow: Any, params: dict[str, Any]) -> None:
@@ -133,6 +135,8 @@ def _log_tags(mlflow: Any, tags: dict[str, str]) -> None:
 COMMON_TAGS = {
     "sf_name_match_v1": "true",
     "run_tag": RUN_TAG,
+    "experiment_alias": LOGICAL_EXPERIMENT_NAME,
+    "logical_experiment_name": LOGICAL_EXPERIMENT_NAME,
     "source_system": SOURCE_SYSTEM,
     "state_code": STATE_CODE,
     "not_hire_signal": "true",
@@ -166,6 +170,7 @@ def run_experiment(
     skip_model: bool,
     spark: Any | None = None,
 ) -> dict[str, Any]:
+    experiment_path = resolve_experiment_path(experiment_name)
     inventory = LabelInventory()
     human_pairs: list[NamePair] = []
     names_mode = "synthetic_fixtures"
@@ -214,7 +219,9 @@ def run_experiment(
     }
     params = {
         "run_tag": RUN_TAG,
-        "experiment_name": EXPERIMENT_NAME,
+        "experiment_name": experiment_path,
+        "experiment_alias": LOGICAL_EXPERIMENT_NAME,
+        "logical_experiment_name": LOGICAL_EXPERIMENT_NAME,
         "names_mode": names_mode,
         "max_names": max_names,
         "seed": seed,
@@ -227,7 +234,7 @@ def run_experiment(
         "source_system": SOURCE_SYSTEM,
         "state_code": STATE_CODE,
     }
-    mlflow = _start_mlflow(experiment_name=experiment_name, enabled=use_mlflow)
+    mlflow = _start_mlflow(experiment_name=experiment_path, enabled=use_mlflow)
     results: dict[str, Any] = {"summary": summary, "metrics": {}}
 
     def _run_nested(run_name: str, fn) -> None:
@@ -303,7 +310,8 @@ def run_experiment(
             parent_ctx.__exit__(None, None, None)
 
     results["feature_names"] = list(FEATURE_NAMES)
-    results["experiment_name"] = EXPERIMENT_NAME
+    results["experiment_name"] = experiment_path
+    results["experiment_alias"] = LOGICAL_EXPERIMENT_NAME
     results["run_tag"] = RUN_TAG
     print("name_match: summary", json.dumps(summary, default=str))
     return results
@@ -314,7 +322,8 @@ def main(argv: list[str] | None = None) -> int:
         description=(
             "SF name-match ranking experiment (research). "
             "Logs rule baseline + model metrics to MLflow experiment "
-            f"{EXPERIMENT_NAME}. Not a hire signal; does not auto-link."
+            f"{EXPERIMENT_PATH} (alias {LOGICAL_EXPERIMENT_NAME}). "
+            "Not a hire signal; does not auto-link."
         )
     )
     parser.add_argument(
@@ -336,10 +345,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument(
         "--experiment-name",
-        default=os.environ.get("MLFLOW_EXPERIMENT_NAME", WORKSPACE_EXPERIMENT_PATH),
+        default=os.environ.get("MLFLOW_EXPERIMENT_NAME", EXPERIMENT_PATH),
         help=(
-            "MLflow experiment. Default /Shared/us_criminal_bg_name_match. "
-            f"Bare name {EXPERIMENT_NAME}; UC {UC_EXPERIMENT_NAME}."
+            "MLflow experiment path. Workspace tracking requires an absolute "
+            f"path. Default {EXPERIMENT_PATH}. Logical alias "
+            f"{LOGICAL_EXPERIMENT_NAME} is rewritten to that path (do not pass "
+            f"the bare name to set_experiment). Optional UC {UC_EXPERIMENT_NAME}."
         ),
     )
     parser.add_argument("--no-mlflow", action="store_true")
@@ -350,13 +361,18 @@ def main(argv: list[str] | None = None) -> int:
         # Databricks default: silver names. Local default: synthetic fixtures.
         args.synthetic = _try_spark() is None and not args.warehouse_id
         args.from_silver = not args.synthetic
+    try:
+        experiment_path = resolve_experiment_path(str(args.experiment_name))
+    except ValueError as exc:
+        print("name_match:", exc)
+        return 2
     run_experiment(
         from_silver=bool(args.from_silver),
         synthetic=bool(args.synthetic),
         warehouse_id=args.warehouse_id,
         max_names=int(args.max_names),
         seed=int(args.seed),
-        experiment_name=str(args.experiment_name),
+        experiment_name=experiment_path,
         use_mlflow=not args.no_mlflow,
         skip_lightgbm=bool(args.skip_lightgbm),
         skip_model=bool(args.skip_model),

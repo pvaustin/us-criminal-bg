@@ -268,7 +268,7 @@ Bump `silver_schema_version` when Silver columns or parse-status/flag vocabulari
 
 ### Changelog
 
-- `2026-09-18` — SF name-match ranking MLflow experiment (`us_criminal_bg_name_match`, tag `sf_name_match_v1`): [`ml/name_match/README.md`](../../ml/name_match/README.md). Research only; does not write `match_decision` or Gold.
+- `2026-09-18` — SF name-match ranking MLflow experiment (physical `/Shared/us_criminal_bg_name_match`, alias `us_criminal_bg_name_match`, tag `sf_name_match_v1`): [`ml/name_match/README.md`](../../ml/name_match/README.md). Research only; does not write `match_decision` or Gold.
 - `2026-09-18` — Pointer to Gold serving MVP (`order_report`, `match_queue`, `source_coverage_metrics`): [`docs/gold/NAMING.md`](../gold/NAMING.md). Silver remains truth/clean; Silver jobs do not write Gold.
 - `2026-09-16` — Append-only `silver.match_decision` + SF name-only research job (last-name retrieve, `dob_absent` → review, never auto). [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md). WCCA path unchanged.
 - `2026-09-16` — Research-only `sf_criminal_hf` / `CA` defendants → `court_party` (`json_cases_v1`). Parallel transform; WCCA path unchanged. [`SF_RESEARCH.md`](SF_RESEARCH.md).

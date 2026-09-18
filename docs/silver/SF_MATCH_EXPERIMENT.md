@@ -184,7 +184,7 @@ Also log `count(DISTINCT subject_ref)`, N requested vs N with ≥1 `review` card
 
 ## ML ranking experiment (research; not product)
 
-A separate scorer/ranker lives in [`ml/name_match/`](../../ml/name_match/README.md). It logs rule-baseline vs logistic / LightGBM metrics to MLflow experiment **`us_criminal_bg_name_match`** (workspace `/Shared/us_criminal_bg_name_match`; optional UC `us_criminal_bg.ml.us_criminal_bg_name_match`), tagged `sf_name_match_v1`.
+A separate scorer/ranker lives in [`ml/name_match/`](../../ml/name_match/README.md). It logs rule-baseline vs logistic / LightGBM metrics to MLflow experiment **`/Shared/us_criminal_bg_name_match`** (Charlie’s logical alias `us_criminal_bg_name_match` is a tag only — workspace MLflow rejects the bare name). Run tag `sf_name_match_v1`. Optional UC override: `us_criminal_bg.ml.us_criminal_bg_name_match`.
 
 It does **not** write `match_decision`, does **not** wire Uma, does **not** auto-link, and does **not** invent court cases. Suggestion cards are not training labels (0 human rows as of this experiment). Driver-local training; Spark or SQL warehouse only to pull name strings.
 

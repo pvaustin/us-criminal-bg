@@ -35,12 +35,16 @@ Pair-level labels only. **Do not claim these are human ground truth.** Variants 
 
 ## MLflow
 
+Workspace tracking requires an **absolute path**. Bare `us_criminal_bg_name_match` is rejected (`INVALID_PARAMETER_VALUE`).
+
 | | |
 |--|--|
-| Experiment **name** | `us_criminal_bg_name_match` |
-| Default workspace path | `/Shared/us_criminal_bg_name_match` (parent `/Shared` already exists) |
-| Optional Unity Catalog experiment | `us_criminal_bg.ml.us_criminal_bg_name_match` (needs schema `us_criminal_bg.ml`) |
+| Physical experiment (`mlflow.set_experiment`) | `/Shared/us_criminal_bg_name_match` |
+| Logical alias (Charlie; tag `experiment_alias` / `logical_experiment_name`) | `us_criminal_bg_name_match` — **not** a `set_experiment` name |
+| Optional Unity Catalog override | `us_criminal_bg.ml.us_criminal_bg_name_match` (needs schema `us_criminal_bg.ml`; pass explicitly) |
 | Run tag | `sf_name_match_v1` |
+
+Coordinator may pre-create `/Shared/us_criminal_bg_name_match`. The job rewrites the logical alias to that path if someone passes the bare name on the CLI.
 
 Parent run + nested runs in the **same** experiment:
 
@@ -48,7 +52,7 @@ Parent run + nested runs in the **same** experiment:
 2. `logistic` — sklearn `LogisticRegression` when present, else numpy logistic
 3. `lightgbm` — `LGBMClassifier` used as a pairwise scorer when the package is installed
 
-Tags on every run: `sf_name_match_v1=true`, `not_hire_signal=true`, `not_auto_link=true`, `dob_used=false`, `uma_wired=false`.
+Tags on every run: `sf_name_match_v1=true`, `experiment_alias=us_criminal_bg_name_match`, `not_hire_signal=true`, `not_auto_link=true`, `dob_used=false`, `uma_wired=false`.
 
 ### Metrics logged (each scorer)
 
@@ -88,7 +92,9 @@ If `mlflow.set_experiment` fails with parent-directory `NOT_FOUND`:
 databricks workspace mkdirs /Shared
 ```
 
-To use the UC experiment instead:
+The coordinator may pre-create the experiment at `/Shared/us_criminal_bg_name_match`. Do **not** call `set_experiment("us_criminal_bg_name_match")` (no leading slash).
+
+To use the UC experiment instead (explicit override only):
 
 ```bash
 python3 ml/name_match/train.py --from-silver \

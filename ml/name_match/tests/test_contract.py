@@ -54,3 +54,5 @@ class ContractTests(unittest.TestCase):
         self.assertIn("/Shared/us_criminal_bg_name_match", readme)
         self.assertIn("us_criminal_bg.ml.us_criminal_bg_name_match", readme)
         self.assertIn("sf_name_match_v1", readme)
+        self.assertIn("alias", readme.lower())
+        self.assertIn("absolute path", readme.lower())
