@@ -5,7 +5,7 @@
 **Repo:** https://github.com/pvaustin/us-criminal-bg  
 **Databricks workspace (non-secret):** `dbc-a0dcbe75-2647.cloud.databricks.com` (workspace ID `7474648418210162`)
 
-This doc is the durable contract for Silver identifiers and transforms. It **mirrors** Bronze national-first principles: state is a **dimension / module**, never the top-level product prefix. Silver **reads** Bronze; it never writes Bronze.
+This doc is the durable contract for Silver identifiers and transforms. It **mirrors** Bronze national-first principles: state is a **dimension / module**, never the top-level product prefix. Silver **reads** Bronze; it never writes Bronze. Silver is the **truth / clean** layer. Serving snapshots for the report UI, `/review`, and `/metrics` live in Gold (`docs/gold/NAMING.md`); Silver transforms do not write Gold.
 
 HTML snapshot parseability (what SSR text can and cannot fill) is documented in [`docs/silver/WCCA_HTML_SSR.md`](WCCA_HTML_SSR.md). Party table `us_criminal_bg.silver.court_party` is documented in [`docs/silver/COURT_PARTY.md`](COURT_PARTY.md). SF HF research defendants (parallel `court_party` path, not WI employer product): [`docs/silver/SF_RESEARCH.md`](SF_RESEARCH.md). Match/review (employer subject vs `court_party`) is [`docs/silver/MATCH_REVIEW.md`](MATCH_REVIEW.md): **no silent auto-link**, MVP default **review** / **no-link**, append-only `us_criminal_bg.silver.match_decision`. SF name-only experiment (never `auto` without both DOBs): [`docs/silver/SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md). Pilot order subject + search audit: [`docs/silver/ORDER_AUDIT.md`](ORDER_AUDIT.md). Not a hire/FCRA output.
 
@@ -13,7 +13,7 @@ HTML snapshot parseability (what SSR text can and cannot fill) is documented in 
 
 1. **National-first.** Catalogs, schemas, top-level repo folders, and job names describe the US court-source product. Do not make `wi` (or any state) the only top-level product prefix. No `wi_*` product tables, catalogs, or schemas.
 2. **State as dimension.** Persist `state_code` (ISO-3166-2 subdivision without country, e.g. `WI`). Source-specific parsers live under `sources/<source_id>/` (MVP: `sources/wcca/parse.py`; research: `sources/sf_criminal_hf/parse_party.py`).
-3. **Analytics-ready, not a hire decision.** Silver cleanses and types Bronze payloads into current-row case / charge / party facts plus lineage. No hire/no-hire, FCRA packages, or Gold. Person **matching** is a review-queue design (`MATCH_REVIEW.md`) plus append-only `match_decision`; it is not a hire engine. The SF research job is isolated (`SF_MATCH_EXPERIMENT.md`).
+3. **Analytics-ready, not a hire decision.** Silver cleanses and types Bronze payloads into current-row case / charge / party facts plus lineage. No hire/no-hire or FCRA packages. Serving marts are **Gold** ([`docs/gold/NAMING.md`](../gold/NAMING.md)); Silver does not write Gold. Person **matching** is a review-queue design (`MATCH_REVIEW.md`) plus append-only `match_decision`; it is not a hire engine. The SF research job is isolated (`SF_MATCH_EXPERIMENT.md`).
 4. **Do not invent court facts.** Fill a column only from identifiers, URL query params, explicit JSON keys, or the documented WCCA HTML SSR regexes in `docs/silver/WCCA_HTML_SSR.md`. If a field is not clearly present, store `NULL` and set `dq_flags` / an honest `payload_parse_status`. Unrelated page chrome (home titles, script bundles) is not a caption.
 5. **Idempotent transforms.** Re-running the same Bronze keys must converge on one Silver case row and the current set of charge and party rows (type-1 overwrite). `transform_run` always **appends**.
 6. **Never scrape.** Transforms consume already-landed Bronze rows only. No HTTP to WCCA or any court site.
@@ -23,7 +23,7 @@ HTML snapshot parseability (what SSR text can and cannot fill) is documented in 
 | Layer | Name | Notes |
 |-------|------|--------|
 | Catalog | `us_criminal_bg` | Same product catalog as Bronze |
-| Schema | `silver` | All Silver tables |
+| Schema | `silver` | All Silver tables (truth / clean). Serving: `us_criminal_bg.gold` — [`docs/gold/NAMING.md`](../gold/NAMING.md) |
 | Volume | *(none for MVP)* | Payloads stay in Bronze / `us_criminal_bg.bronze.court_source` |
 
 Do **not** create `wi_*` catalogs/schemas. Wisconsin appears only as `state_code = 'WI'` and in source/module paths (`sources/wcca/`, `states/wi/`).
@@ -229,6 +229,7 @@ Live SSR for that grain includes a defendant block with labeled name, date of bi
 ```
 docs/
   bronze/NAMING.md
+  gold/NAMING.md            ← serving snapshots (reads Silver; does not write Silver)
   silver/NAMING.md          ← this file (contract)
   silver/COURT_PARTY.md     ← court_party schema / extraction / lineage
   silver/SF_RESEARCH.md     ← sf_criminal_hf research parties (experiment-only)
@@ -245,11 +246,15 @@ silver/
   schemas/                  ← Unity Catalog DDL (court_case, court_charge, court_party, transform_run, order_subject, search_audit, match_decision)
   transforms/               ← Spark SQL + Python MERGE; match_review_sketch.py bands; SF research match_decision job
   jobs/README.md            ← how to run
+gold/
+  schemas/                  ← order_report, match_queue, source_coverage_metrics
+  transforms/               ← refresh from Silver (Delta scratch, not TEMP VIEW)
+  jobs/README.md            ← coordinator apply + prove
 ```
 
 ## Out of scope (do not put in Silver)
 
-- Person match as a **hire engine**, FCRA adverse-action packages, Gold marts (review-queue + append store `match_decision` must not be treated as a hiring engine; SF name-only job is research-only)
+- Person match as a **hire engine**, FCRA adverse-action packages (review-queue + append store `match_decision` must not be treated as a hiring engine; SF name-only job is research-only). Gold serving marts are a **sibling** schema — Silver jobs must not write `us_criminal_bg.gold.*`
 - Invented or hallucinated court records; county-name lookup tables that can be wrong
 - Secrets, PATs, cookies, CAPTCHA tokens in git or chat
 - Scraping WCCA or mutating Bronze
@@ -261,6 +266,7 @@ Bump `silver_schema_version` when Silver columns or parse-status/flag vocabulari
 
 ### Changelog
 
+- `2026-09-18` — Pointer to Gold serving MVP (`order_report`, `match_queue`, `source_coverage_metrics`): [`docs/gold/NAMING.md`](../gold/NAMING.md). Silver remains truth/clean; Silver jobs do not write Gold.
 - `2026-09-16` — Append-only `silver.match_decision` + SF name-only research job (last-name retrieve, `dob_absent` → review, never auto). [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md). WCCA path unchanged.
 - `2026-09-16` — Research-only `sf_criminal_hf` / `CA` defendants → `court_party` (`json_cases_v1`). Parallel transform; WCCA path unchanged. [`SF_RESEARCH.md`](SF_RESEARCH.md).
 - `2026-09-16` — Pilot `order_subject` (type-1) + `search_audit` (append-only): [`ORDER_AUDIT.md`](ORDER_AUDIT.md). Doc + DDL only; no warehouse apply; no scoring job.

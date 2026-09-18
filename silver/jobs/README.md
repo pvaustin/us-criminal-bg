@@ -97,4 +97,4 @@ Business attributes for a given Bronze key converge; `transformed_at` / `transfo
 
 ## Out of scope
 
-Person matching as a hire engine, FCRA, Gold, scraping WCCA, writing Bronze. Review-queue bands (no silent auto-link) are [`docs/silver/MATCH_REVIEW.md`](../../docs/silver/MATCH_REVIEW.md). SF name-only research job: [`docs/silver/SF_MATCH_EXPERIMENT.md`](../../docs/silver/SF_MATCH_EXPERIMENT.md).
+Person matching as a hire engine, FCRA, scraping WCCA, writing Bronze. Gold serving marts (`docs/gold/NAMING.md`) read Silver — Silver jobs do not write Gold. Review-queue bands (no silent auto-link) are [`docs/silver/MATCH_REVIEW.md`](../../docs/silver/MATCH_REVIEW.md). SF name-only research job: [`docs/silver/SF_MATCH_EXPERIMENT.md`](../../docs/silver/SF_MATCH_EXPERIMENT.md).

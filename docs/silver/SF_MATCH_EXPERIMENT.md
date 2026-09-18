@@ -66,7 +66,7 @@ Python is the source of truth for bands. Warehouse SQL mirrors the same rules (`
 
 Append-only. One row = one subject × one party card at one `decided_at`. A later human decision is a **new** row (`review_status='human'`, `actor` = reviewer), never an overwrite.
 
-Uma reads this table. Do not treat a UI-only store as the system of record.
+Uma reads this table. Do not treat a UI-only store as the system of record. Open-card serving shortcut (no full scan): `us_criminal_bg.gold.match_queue` ([`docs/gold/NAMING.md`](../gold/NAMING.md)).
 
 ## Uma query / API contract
 

@@ -6,7 +6,7 @@
 **Sketch helper:** `silver/transforms/match_review_sketch.py` (pure Python, synthetic examples — **not** silent auto-link)  
 **SF research job:** [`docs/silver/SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md) — name-only scoring of sample subjects against `sf_criminal_hf` / `CA` defendants; still not a hire engine
 
-This is a design sketch so Uma can build a review queue against party facts Silver already stores. It does **not** scrape, does **not** write Bronze, does **not** write Gold, and does **not** produce a hire / FCRA adverse-action output.
+This is a design sketch so Uma can build a review queue against party facts Silver already stores. It does **not** scrape, does **not** write Bronze, does **not** write Gold, and does **not** produce a hire / FCRA adverse-action output. Serving shortcut for **open** cards: [`docs/gold/NAMING.md`](../gold/NAMING.md) `us_criminal_bg.gold.match_queue` (latest suggestion `review`/`auto` without a later human close). Report UI: `gold.order_report`. `/metrics`: `gold.source_coverage_metrics`. Silver `match_decision` remains the append-only truth.
 
 AKA rows are **one person-name each** (`Last, First[ M]`); `address_raw` stops at ZIP / before Branch ID. See `docs/silver/WCCA_HTML_SSR.md`.
 

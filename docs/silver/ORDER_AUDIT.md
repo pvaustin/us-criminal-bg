@@ -3,7 +3,7 @@
 **Owner:** silva silver (schema) / Uma (web writes)  
 **Catalog:** `us_criminal_bg.silver`  
 **DDL:** [`silver/schemas/order_subject.sql`](../../silver/schemas/order_subject.sql) · [`silver/schemas/search_audit.sql`](../../silver/schemas/search_audit.sql)  
-**Related:** [`MATCH_REVIEW.md`](MATCH_REVIEW.md) (`match_decision`, review queue) · [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md) · [`COURT_PARTY.md`](COURT_PARTY.md)
+**Related:** [`MATCH_REVIEW.md`](MATCH_REVIEW.md) (`match_decision`, review queue) · [`SF_MATCH_EXPERIMENT.md`](SF_MATCH_EXPERIMENT.md) · [`COURT_PARTY.md`](COURT_PARTY.md) · Gold serving (`order_report` LEFT JOIN / fallback when these tables are not live): [`docs/gold/NAMING.md`](../gold/NAMING.md)
 
 Pilot tables so Uma can persist the **employer order subject** and an **auditable search log**. This is not a court-fact transform. It does **not** scrape, does **not** invent court records, does **not** add a scoring job, and does **not** produce hire / no-hire or FCRA packages.
 

@@ -19,12 +19,11 @@ Analytics-ready **party facts** extracted from already-landed Bronze (WCCA `html
 | Out of scope | Why |
 |--------------|-----|
 | Identity graph / person-id | Rows are source parties, not linked people |
-| Hire / no-hire, FCRA packages, Gold | Silver facts only |
+| Hire / no-hire, FCRA packages | Silver facts only. Serving marts: [`docs/gold/NAMING.md`](../gold/NAMING.md) |
 | Race column | Agency-provided and subjective; **matching must not require it**. The HTML `Race` label is ignored even when present |
 | Scrape / HTTP to WCCA | Transforms consume Bronze only |
 | Bronze writes | No INSERT/UPDATE/DELETE on `us_criminal_bg.bronze.*` |
 | Silent auto-link | Matching is a review-queue design (`MATCH_REVIEW.md`), not this table |
-| Hire / no-hire, FCRA packages, Gold | Silver facts only |
 
 ## Schema
 

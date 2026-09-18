@@ -2,18 +2,20 @@
 
 US criminal background verification — court-source data platform.
 
-**MVP first slice:** Wisconsin WCCA → Databricks **Bronze**, then **Silver** (national-first naming; state is a dimension).
+**MVP first slice:** Wisconsin WCCA → Databricks **Bronze**, then **Silver** (national-first naming; state is a dimension), then **Gold** serving snapshots for report / `/review` / `/metrics`.
 
 | Lane | Agent | Owns |
 |------|-------|------|
 | Bronze | brian bronze | Raw / near-raw landing, naming contract, WCCA ingest skeleton |
-| Silver | silva silver | Cleanses / transforms over Bronze — [`docs/silver/NAMING.md`](docs/silver/NAMING.md) |
+| Silver | silva silver | Cleanses / transforms over Bronze — [`docs/silver/NAMING.md`](docs/silver/NAMING.md) (truth / clean) |
+| Gold | silva silver | Serving marts over Silver — [`docs/gold/NAMING.md`](docs/gold/NAMING.md) (`order_report`, `match_queue`, `source_coverage_metrics`) |
 | Plan | court-cto | Technical plan and orchestration |
 
 ## Quick links
 
 - Bronze naming contract: [`docs/bronze/NAMING.md`](docs/bronze/NAMING.md)
 - Silver naming contract: [`docs/silver/NAMING.md`](docs/silver/NAMING.md)
+- Gold naming + serving: [`docs/gold/NAMING.md`](docs/gold/NAMING.md) · [`docs/gold/ACCESS.md`](docs/gold/ACCESS.md)
 - Silver `court_party`: [`docs/silver/COURT_PARTY.md`](docs/silver/COURT_PARTY.md)
 - SF HF research parties (experiment-only): [`docs/silver/SF_RESEARCH.md`](docs/silver/SF_RESEARCH.md)
 - WCCA HTML SSR parseability: [`docs/silver/WCCA_HTML_SSR.md`](docs/silver/WCCA_HTML_SSR.md)
@@ -27,6 +29,7 @@ US criminal background verification — court-source data platform.
 - SF HF research mapper + party parser: [`sources/sf_criminal_hf/`](sources/sf_criminal_hf/)
 - Bronze jobs: [`bronze/jobs/README.md`](bronze/jobs/README.md)
 - Silver jobs: [`silver/jobs/README.md`](silver/jobs/README.md)
+- Gold jobs: [`gold/jobs/README.md`](gold/jobs/README.md)
 
 ## Product docs
 
@@ -44,4 +47,4 @@ Product concept, PRD sketch, roadmap, strategy, and market personas live in [`do
 - Host: `dbc-a0dcbe75-2647.cloud.databricks.com`
 - Workspace ID: `7474648418210162`
 - Catalog: `us_criminal_bg`
-- Schemas: `us_criminal_bg.bronze`, `us_criminal_bg.silver`
+- Schemas: `us_criminal_bg.bronze`, `us_criminal_bg.silver`, `us_criminal_bg.gold`
