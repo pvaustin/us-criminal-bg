@@ -182,12 +182,19 @@ Expect: **`auto = 0`**. If `auto > 0` on this corpus, party DOB leaked or the ba
 
 Also log `count(DISTINCT subject_ref)`, N requested vs N with ≥1 `review` card, and a few `party_key` / `source_record_id` prefixes (no `raw_name`).
 
+## ML ranking experiment (research; not product)
+
+A separate scorer/ranker lives in [`ml/name_match/`](../../ml/name_match/README.md). It logs rule-baseline vs logistic / LightGBM metrics to MLflow experiment **`/Shared/us_criminal_bg_name_match`** (Charlie’s logical alias `us_criminal_bg_name_match` is a tag only — workspace MLflow rejects the bare name). Run tag `sf_name_match_v1`. Optional UC override: `us_criminal_bg.ml.us_criminal_bg_name_match`.
+
+It does **not** write `match_decision`, does **not** wire Uma, does **not** auto-link, and does **not** invent court cases. Suggestion cards are not training labels (0 human rows as of this experiment). Driver-local training; Spark or SQL warehouse only to pull name strings.
+
 ## Tests (local, synthetic)
 
 ```bash
 python3 -m unittest discover -s silver/transforms/tests -v
 python3 -m unittest discover -s sources/sf_criminal_hf/tests -v
 python3 -m unittest discover -s sources/wcca/tests -v
+python3 -m unittest discover -s ml/name_match/tests -v
 ```
 
 Fixtures use names such as `JANE Q PUBLIC` / `JOHN MARSHALL FIXTURE` — **not** live defendants.

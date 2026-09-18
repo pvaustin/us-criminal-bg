@@ -21,6 +21,7 @@ US criminal background verification — court-source data platform.
 - WCCA HTML SSR parseability: [`docs/silver/WCCA_HTML_SSR.md`](docs/silver/WCCA_HTML_SSR.md)
 - Match / review sketch: [`docs/silver/MATCH_REVIEW.md`](docs/silver/MATCH_REVIEW.md)
 - SF name-only match experiment (research, not CRA): [`docs/silver/SF_MATCH_EXPERIMENT.md`](docs/silver/SF_MATCH_EXPERIMENT.md)
+- SF name-match ranking MLflow (`sf_name_match_v1`): [`ml/name_match/README.md`](ml/name_match/README.md)
 - Pilot order subject + search audit: [`docs/silver/ORDER_AUDIT.md`](docs/silver/ORDER_AUDIT.md)
 - Source access / ToS notes: [`docs/bronze/ACCESS.md`](docs/bronze/ACCESS.md)
 - VA research (gated named; no anonymized load): [`docs/bronze/ACCESS_VA_COURT_DATA.md`](docs/bronze/ACCESS_VA_COURT_DATA.md)
