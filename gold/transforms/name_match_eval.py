@@ -31,9 +31,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from gold.transforms.gold_mvp import (  # noqa: E402
     HIRE_FORBIDDEN_TOKENS,
-    OPEN_BANDS,
     REVIEW_STATUS_HUMAN,
-    REVIEW_STATUS_SUGGESTION,
     is_open_queue_card,
     latest_row_per_subject_party,
     party_key_from_row,

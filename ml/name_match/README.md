@@ -33,6 +33,45 @@ Until humans append link/reject rows, training is **weakly supervised + syntheti
 
 Pair-level labels only. **Do not claim these are human ground truth.** Variants are not new court rows.
 
+## Human eval (held-out `link` / `reject`)
+
+Gold tables: [`docs/gold/NAME_MATCH_EVAL.md`](../../docs/gold/NAME_MATCH_EVAL.md).
+
+| Item (2026-09-18) | N | In GT metrics? |
+|-------------------|--:|----------------|
+| Human `match_decision` | **0** | n/a |
+| `gold.name_match_eval` | **0** (honest empty) | `link`/`reject` only |
+| Suggestion / `match_queue` cards | **40** | **No** |
+| `gold.name_match_label_pack` | ~40 open + hard negatives | unlabeled (`label` NULL) |
+
+Label mapping from latest human `match_decision` band:
+
+| Human band | Eval label | GT? |
+|------------|------------|-----|
+| `auto` | `link` | yes (explicit human confirm) |
+| `no-link` | `reject` | yes |
+| `review` | `leave_in_review` | **exclude** |
+
+### How to generate more labels
+
+1. Coordinator applies eval/pack DDL and refreshes `gold.match_queue`, then `gold.name_match_label_pack` (open SF cards + different-last-name `court_party` distractors; empty `label`).
+2. Uma `/review`: append `silver.match_decision` with `review_status='human'` (`auto` = link, `no-link` = reject, `review` or skip = leave_in_review).
+3. Refresh `gold.name_match_eval`.
+4. `python3 ml/name_match/eval_human.py` (or `train.py --human-eval`).
+
+### MLflow
+
+```bash
+python3 ml/name_match/train.py --human-eval
+python3 ml/name_match/eval_human.py
+```
+
+Same experiment `/Shared/us_criminal_bg_name_match`. Tags: `human_eval=true`, `sf_name_match_v1_human=true`. Nested `rule_baseline` / `logistic` / `lightgbm` on **held-out human pairs only**. Does not mix synthetic GT.
+
+**N=0 (today):** logs `n_human=0`, `n_gt=0`, `synthesized=0` and exits 0. No fake PR-AUC.
+
+**N small:** if fewer than 4 train queries after a held-out split, score `rule_baseline` only. Do not claim logistic/LightGBM beats the baseline.
+
 ## MLflow
 
 Workspace tracking requires an **absolute path**. Bare `us_criminal_bg_name_match` is rejected (`INVALID_PARAMETER_VALUE`).
@@ -114,6 +153,7 @@ Rule baseline is the existing sketch (`silver/transforms/match_review_sketch.py`
 ```bash
 python3 -m unittest discover -s ml/name_match/tests -v
 python3 ml/name_match/train.py --synthetic --no-mlflow --skip-lightgbm
+python3 ml/name_match/train.py --human-eval --no-mlflow
 ```
 
 Fixtures reuse documented names (`JANE Q PUBLIC`, `JOHN MARSHALL FIXTURE`, …). They are **not** live defendants.

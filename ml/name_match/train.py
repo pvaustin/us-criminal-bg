@@ -6,6 +6,8 @@ Databricks job / notebook entry (Spark optional):
     python3 ml/name_match/train.py --from-silver
     python3 ml/name_match/train.py --from-silver --warehouse-id <id>
     python3 ml/name_match/train.py --synthetic --no-mlflow
+    python3 ml/name_match/train.py --human-eval
+    python3 ml/name_match/eval_human.py
 
 Pulls SF `court_party` **name strings** (no DOB). Builds pair-level synthetic
 labels (exact / near-positive / same-last different-first / different last).
@@ -13,9 +15,13 @@ Does **not** invent court cases or charges. Does **not** treat
 `system:suggestion` queue cards as link labels. Does **not** write
 `match_decision` or wire Uma. Human review stays required.
 
+`--human-eval` loads `gold.name_match_eval` (human `link`/`reject` only;
+`leave_in_review` excluded). If N=0, log zeros and exit 0 — do not synthesize GT.
+
 MLflow experiment (physical path): `/Shared/us_criminal_bg_name_match`
 Logical alias / tag (Charlie): `us_criminal_bg_name_match` — not a set_experiment name
 Run tag: `sf_name_match_v1`
+Human-eval tags: `human_eval=true`, `sf_name_match_v1_human=true`
 
 Logs rule-baseline metrics and model metrics in the **same** experiment
 (parent run + nested `rule_baseline` / `logistic` / `lightgbm`).
@@ -28,7 +34,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -38,6 +44,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from ml.name_match.baseline import rule_rank_scores, rule_review_mask  # noqa: E402
 from ml.name_match.constants import (  # noqa: E402
+    EVAL_TABLE,
     EXPERIMENT_PATH,
     FEATURE_NAMES,
     LOGICAL_EXPERIMENT_NAME,
@@ -51,11 +58,14 @@ from ml.name_match.dataset import (  # noqa: E402
     LabelInventory,
     NamePair,
     build_synthetic_pairs,
+    count_leave_in_review,
     filter_pairs,
+    load_eval_table_rows,
     load_human_pairs,
     load_label_inventory,
     load_sf_party_names,
     pair_dicts,
+    pairs_from_human_decisions,
     split_query_ids,
     summarize_pairs,
     synthetic_fixture_records,
@@ -155,6 +165,200 @@ def _evaluate(
 ) -> dict[str, float]:
     metrics = evaluate_ranker(pairs, scores, review_mask=review_mask, prefix=f"{name}_")
     return metrics
+
+
+MIN_HUMAN_TRAIN = 4
+HUMAN_EVAL_TAGS = {
+    **COMMON_TAGS,
+    "human_eval": "true",
+    "sf_name_match_v1_human": "true",
+    "label_strategy": "held_out_human_only",
+}
+
+
+def run_human_eval(
+    *,
+    warehouse_id: str | None,
+    seed: int,
+    experiment_name: str,
+    use_mlflow: bool,
+    skip_lightgbm: bool,
+    skip_model: bool,
+    spark: Any | None = None,
+    eval_rows: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Held-out human link|reject only. Never synthesizes GT. N=0 is a no-op."""
+    experiment_path = resolve_experiment_path(experiment_name)
+    spark = spark if spark is not None else _try_spark()
+    wid = warehouse_id or os.environ.get("DATABRICKS_WAREHOUSE_ID")
+    if eval_rows is None:
+        rows = load_eval_table_rows(spark=spark, warehouse_id=wid)
+        if rows:
+            leave_n = count_leave_in_review(rows)
+            human_pairs = pairs_from_human_decisions(rows)
+            n_eval_rows = len(rows)
+        else:
+            human_pairs = load_human_pairs(spark=spark, warehouse_id=wid)
+            leave_n = 0
+            n_eval_rows = 0
+    else:
+        rows = list(eval_rows)
+        leave_n = count_leave_in_review(rows)
+        human_pairs = pairs_from_human_decisions(rows)
+        n_eval_rows = len(rows)
+
+    n_gt = len(human_pairs)
+    n_link = sum(1 for p in human_pairs if p.label == 1)
+    n_reject = sum(1 for p in human_pairs if p.label == 0)
+    summary = {
+        "names_mode": "held_out_human_only",
+        "eval_table": EVAL_TABLE,
+        "n_eval_rows": n_eval_rows,
+        "n_human_labels": n_gt,
+        "n_link": n_link,
+        "n_reject": n_reject,
+        "n_leave_in_review": leave_n,
+        "n_gt": n_gt,
+        "synthesized": False,
+        "uses_dob": False,
+        "status": "no_human_gt" if n_gt == 0 else "evaluated",
+    }
+    params = {
+        "run_tag": f"{RUN_TAG}_human",
+        "experiment_name": experiment_path,
+        "eval_table": EVAL_TABLE,
+        "label_strategy": "held_out_human_only",
+        "suggestions_are_labels": "false",
+        "synthesized": "false",
+        "uses_dob": "false",
+        "writes_match_decision": "false",
+        "wires_uma": "false",
+        "human_eval": "true",
+    }
+    mlflow = _start_mlflow(experiment_name=experiment_path, enabled=use_mlflow)
+    results: dict[str, Any] = {
+        "summary": summary,
+        "metrics": {},
+        "skipped_models": {},
+        "experiment_name": experiment_path,
+        "run_tag": f"{RUN_TAG}_human",
+        "synthesized": False,
+    }
+    parent_ctx = (
+        mlflow.start_run(run_name=f"{RUN_TAG}_human") if mlflow is not None else None
+    )
+    try:
+        if mlflow is not None:
+            _log_tags(mlflow, HUMAN_EVAL_TAGS)
+            _log_params(mlflow, params)
+            _log_metrics(
+                mlflow,
+                {
+                    "n_human": float(n_eval_rows or n_gt + leave_n),
+                    "n_gt": float(n_gt),
+                    "n_link": float(n_link),
+                    "n_reject": float(n_reject),
+                    "n_leave_in_review": float(leave_n),
+                    "synthesized": 0.0,
+                },
+            )
+        if n_gt == 0:
+            print(
+                "name_match: human_eval n_human=0 n_gt=0 "
+                "(suggestions are not GT; not synthesizing)"
+            )
+            summary["notes"] = (
+                "No human link|reject labels. Do not claim a model beats baseline."
+            )
+            print("name_match: human_eval summary", json.dumps(summary, default=str))
+            return results
+
+        train_ids, test_ids = split_query_ids(human_pairs, seed=seed)
+        train_pairs = filter_pairs(human_pairs, train_ids)
+        test_pairs = filter_pairs(human_pairs, test_ids)
+        if len(train_pairs) < MIN_HUMAN_TRAIN or not test_pairs:
+            train_pairs = []
+            test_pairs = list(human_pairs)
+            summary["status"] = "n_too_small_rule_only"
+            results["skipped_models"] = {
+                "logistic": f"need n_train>={MIN_HUMAN_TRAIN}",
+                "lightgbm": f"need n_train>={MIN_HUMAN_TRAIN}",
+            }
+            print(
+                "name_match: human GT n=",
+                n_gt,
+                "too small to fit models; scoring rule_baseline only",
+            )
+        train_docs = pair_dicts(train_pairs)
+        test_docs = pair_dicts(test_pairs)
+        summary["n_train"] = len(train_pairs)
+        summary["n_test"] = len(test_pairs)
+        review_mask = rule_review_mask(test_docs)
+
+        def _run_nested(run_name: str, fn) -> None:
+            if mlflow is None:
+                fn(None)
+                return
+            with mlflow.start_run(run_name=run_name, nested=True):
+                _log_tags(mlflow, HUMAN_EVAL_TAGS)
+                _log_tags(mlflow, {"model_family": run_name})
+                fn(mlflow)
+
+        def _baseline(_ml) -> None:
+            scores = rule_rank_scores(test_docs)
+            metrics = _evaluate("baseline", test_docs, scores, review_mask)
+            results["metrics"].update(metrics)
+            if _ml is not None:
+                _log_params(_ml, {"scorer": "match_review_sketch", "human_eval": "true"})
+                _log_metrics(_ml, metrics)
+            print("name_match: human_eval rule_baseline", json.dumps(mlflow_metric_items(metrics)))
+
+        _run_nested("rule_baseline", _baseline)
+
+        if train_pairs and not skip_model:
+            X_train = np.asarray(matrix_from_pairs(train_docs), dtype=float)
+            y_train = np.asarray([p.label for p in train_pairs], dtype=int)
+            X_test = np.asarray(matrix_from_pairs(test_docs), dtype=float)
+
+            def _logistic(_ml) -> None:
+                model = train_logistic(X_train, y_train, seed=seed)
+                scores = model.predict_scores(X_test)
+                metrics = _evaluate("logistic", test_docs, scores, review_mask)
+                results["metrics"].update(metrics)
+                if _ml is not None:
+                    _log_params(_ml, {"scorer": model.name, "human_eval": "true"})
+                    _log_metrics(_ml, metrics)
+                print("name_match: human_eval logistic", json.dumps(mlflow_metric_items(metrics)))
+
+            _run_nested("logistic", _logistic)
+
+            if not skip_lightgbm:
+                def _lgbm(_ml) -> None:
+                    if not lightgbm_available():
+                        print("name_match: lightgbm not installed; skipped")
+                        results["skipped_models"]["lightgbm"] = "unavailable"
+                        return
+                    model: FittedScorer = train_lightgbm(X_train, y_train, seed=seed)
+                    scores = model.predict_scores(X_test)
+                    metrics = _evaluate("lightgbm", test_docs, scores, review_mask)
+                    results["metrics"].update(metrics)
+                    if _ml is not None:
+                        _log_params(_ml, {"scorer": model.name, "human_eval": "true"})
+                        _log_metrics(_ml, metrics)
+                    print("name_match: human_eval lightgbm", json.dumps(mlflow_metric_items(metrics)))
+
+                _run_nested("lightgbm", _lgbm)
+        elif skip_model:
+            results["skipped_models"]["logistic"] = "skip_model"
+            results["skipped_models"]["lightgbm"] = "skip_model"
+    finally:
+        if parent_ctx is not None:
+            parent_ctx.__exit__(None, None, None)
+
+    results["experiment_name"] = experiment_path
+    results["run_tag"] = f"{RUN_TAG}_human"
+    print("name_match: human_eval summary", json.dumps(summary, default=str))
+    return results
 
 
 def run_experiment(
@@ -356,16 +560,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-mlflow", action="store_true")
     parser.add_argument("--skip-lightgbm", action="store_true")
     parser.add_argument("--skip-model", action="store_true", help="Log rule baseline only")
+    parser.add_argument(
+        "--human-eval",
+        action="store_true",
+        help=(
+            "Held-out human labels from gold.name_match_eval only. "
+            "N=0 logs zeros and exits 0; does not synthesize GT."
+        ),
+    )
     args = parser.parse_args(argv)
-    if not args.from_silver and not args.synthetic:
-        # Databricks default: silver names. Local default: synthetic fixtures.
-        args.synthetic = _try_spark() is None and not args.warehouse_id
-        args.from_silver = not args.synthetic
     try:
         experiment_path = resolve_experiment_path(str(args.experiment_name))
     except ValueError as exc:
         print("name_match:", exc)
         return 2
+    if args.human_eval:
+        run_human_eval(
+            warehouse_id=args.warehouse_id,
+            seed=int(args.seed),
+            experiment_name=experiment_path,
+            use_mlflow=not args.no_mlflow,
+            skip_lightgbm=bool(args.skip_lightgbm),
+            skip_model=bool(args.skip_model),
+        )
+        return 0
+    if not args.from_silver and not args.synthetic:
+        # Databricks default: silver names. Local default: synthetic fixtures.
+        args.synthetic = _try_spark() is None and not args.warehouse_id
+        args.from_silver = not args.synthetic
     run_experiment(
         from_silver=bool(args.from_silver),
         synthetic=bool(args.synthetic),
