@@ -12,8 +12,9 @@ From the repo root:
 
 ```bash
 python3 -m unittest discover -s gold/transforms/tests -v
-python3 -m py_compile gold/transforms/gold_mvp.py
+python3 -m py_compile gold/transforms/gold_mvp.py gold/transforms/name_match_eval.py
 python3 gold/transforms/gold_mvp.py --help
+python3 gold/transforms/name_match_eval.py --help
 ```
 
 Synthetic names only (`JANE Q PUBLIC`, `FIXTURE, JANE Q`) — **not** live defendants.
@@ -27,6 +28,7 @@ Operator-only. Statement-at-a-time apply: scripts use durable Delta scratch tabl
 3. Run [`gold/schemas/match_queue.sql`](../schemas/match_queue.sql).
 4. Run [`gold/schemas/source_coverage_metrics.sql`](../schemas/source_coverage_metrics.sql).
 5. Confirm `us_criminal_bg.gold.order_report`, `us_criminal_bg.gold.match_queue`, and `us_criminal_bg.gold.source_coverage_metrics` exist.
+6. Name-match eval (research): run [`gold/schemas/name_match_eval.sql`](../schemas/name_match_eval.sql) and [`gold/schemas/name_match_label_pack.sql`](../schemas/name_match_label_pack.sql). See [`docs/gold/NAME_MATCH_EVAL.md`](../../docs/gold/NAME_MATCH_EVAL.md).
 
 Non-secret workspace notes (same as Bronze/Silver): host `dbc-a0dcbe75-2647.cloud.databricks.com`, workspace id `7474648418210162`. Auth stays in the Databricks CLI profile / workspace — never commit `.databrickscfg` or tokens.
 
@@ -42,6 +44,7 @@ Run **in this order** (each file is self-contained except the optional order_sub
 2. [`gold/transforms/source_coverage_metrics.sql`](../transforms/source_coverage_metrics.sql)
 3. [`gold/transforms/order_report.sql`](../transforms/order_report.sql) — **does not** `SELECT` from `silver.order_subject` (not live). Subjects come from `match_decision`.
 4. **Optional, only if** `silver.order_subject` exists: [`gold/transforms/order_subject_src_from_silver.sql`](../transforms/order_subject_src_from_silver.sql) then **re-run** `order_report.sql`.
+5. Name-match eval (after `match_queue`): [`gold/transforms/name_match_label_pack.sql`](../transforms/name_match_label_pack.sql) then [`gold/transforms/name_match_eval.sql`](../transforms/name_match_eval.sql). Eval is empty while N_human=0. Pack is unlabeled.
 
 Do **not** run `order_subject_src_from_silver.sql` when that Silver table is missing.
 
@@ -51,7 +54,11 @@ Do **not** run `order_subject_src_from_silver.sql` when that Silver table is mis
 
 ```bash
 python3 gold/transforms/gold_mvp.py --apply
+python3 gold/transforms/name_match_eval.py --apply
+python3 ml/name_match/train.py --human-eval
 ```
+
+`name_match_eval.py --apply` writes eval (human-only; empty when N=0) and the unlabeled label pack (requires `match_queue`). `--human-eval` logs zeros to `/Shared/us_criminal_bg_name_match` when there are no human labels — it does **not** synthesize GT.
 
 Requires a Spark session (Databricks cluster / notebook with repo on `sys.path`). Try-or-skips `order_subject`; logs that `search_audit` is never read.
 
@@ -62,6 +69,8 @@ Requires a Spark session (Databricks cluster / notebook with repo on `sys.path`)
 | `gold.order_report` | `CREATE OR REPLACE` snapshot on `(subject_ref, party_key)` |
 | `gold.match_queue` | `CREATE OR REPLACE` snapshot of **open** cards only |
 | `gold.source_coverage_metrics` | `MERGE` on `(as_of_date, state_code, source_system)` — same day overwrites |
+| `gold.name_match_eval` | `CREATE OR REPLACE` latest SF humans (`link`/`reject`/`leave_in_review`); empty when N=0 |
+| `gold.name_match_label_pack` | `CREATE OR REPLACE` unlabeled open SF cards + hard negatives |
 | Silver / Bronze | **never** written |
 
 ## Coordinator prove (identifier-only — no live names)
@@ -101,6 +110,17 @@ SELECT as_of_date, source_system, state_code,
        suggestion_row_count, open_review_count, closed_review_count
 FROM us_criminal_bg.gold.source_coverage_metrics
 ORDER BY source_system, state_code;
+
+-- Human eval (expect 0 rows until Uma appends humans)
+SELECT label, count(*) AS n
+FROM us_criminal_bg.gold.name_match_eval
+GROUP BY label;
+
+-- Unlabeled pack (expect ~40 open_queue + hard_negatives; label always null)
+SELECT pair_kind, count(*) AS n,
+       sum(CASE WHEN label IS NULL THEN 1 ELSE 0 END) AS unlabeled
+FROM us_criminal_bg.gold.name_match_label_pack
+GROUP BY pair_kind;
 ```
 
 Expect after a clean refresh (until humans append or `order_subject` lands):
@@ -112,9 +132,11 @@ Expect after a clean refresh (until humans append or `order_subject` lands):
 | metrics `case_count` | **1** | **0** |
 | metrics `party_count` | **6** | **77399** |
 | metrics suggestions / open | 0 / 0 | **40** / **~40** |
+| `name_match_eval` | n/a (SF-only) | **0** until humans append |
+| `name_match_label_pack` | **0** (SF-only) | **~40** open_queue + ~1 hard_negative per subject; `label` NULL |
 
 If `order_report` SF rows have `has_court_case=true` or `charge_row_count>0`, Gold invented a case — **stop**. If WI metrics `case_count<>1`, Silver drift — report it. Do not paste live `raw_name` / DOB / street.
 
 ## Out of scope
 
-Hire / no-hire, FCRA packages, `party_name_index`, scraping, Bronze/Silver writes, live PII in git.
+Hire / no-hire, FCRA packages, `party_name_index`, scraping, Bronze/Silver writes, live PII in git. Treating `system:suggestion` as name-match GT.

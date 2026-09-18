@@ -32,7 +32,7 @@ Gold must **tolerate missing** `order_subject` / `search_audit` (empty scratch +
 6. **Idempotent refresh.** Re-running the same Silver keys must converge on one current Gold row per serving grain. `order_report` and `match_queue` are type-1 snapshots (`CREATE OR REPLACE`). `source_coverage_metrics` MERGEs the calendar `as_of_date` so same-day reruns overwrite and other days remain.
 7. **Never scrape. Never mutate Bronze or Silver.** Transforms consume already-landed Silver only.
 8. **No live PII in git.** Tests use synthetic fixture names (`JANE Q PUBLIC`, `FIXTURE, JANE Q`). Coordinator prove reports **counts + keys**, not full names / DOB / street.
-9. **Defer `party_name_index`.** These three tables join `court_party` on the existing natural key / `party_key`. Do not add a name index for this MVP.
+9. **Defer `party_name_index`.** The serving tables join `court_party` on the existing natural key / `party_key`. Do not add a name index for this MVP.
 10. **Warehouse SQL is statement-at-a-time.** Use durable Delta scratch tables (`CREATE OR REPLACE TABLE … USING DELTA`). Do **not** use `TEMP VIEW` (the warehouse `/api/2.0/sql/statements` apply drops them between statements).
 
 ## Unity Catalog / object names
@@ -45,7 +45,7 @@ Gold must **tolerate missing** `order_subject` / `search_audit` (empty scratch +
 
 Do **not** create `wi_*` catalogs/schemas.
 
-### Tables (this MVP — these three only)
+### Tables (serving MVP)
 
 | Table | Purpose | Grain |
 |-------|---------|-------|
@@ -54,6 +54,17 @@ Do **not** create `wi_*` catalogs/schemas.
 | `us_criminal_bg.gold.source_coverage_metrics` | Refreshable counts for `/metrics` | `(as_of_date, state_code, source_system)` |
 
 `search_audit` is **not** a Gold input for this MVP (table not live; not required for these grains).
+
+### Tables (name-match eval — research, not UI serving)
+
+Human-labeled eval for `sf_name_match_v1`. **Suggestions are not GT.** Contract: [`NAME_MATCH_EVAL.md`](NAME_MATCH_EVAL.md) · operator: [`ml/name_match/README.md`](../../ml/name_match/README.md).
+
+| Table | Purpose | Grain |
+|-------|---------|-------|
+| `us_criminal_bg.gold.name_match_eval` | Latest **human** SF `match_decision` mapped to `link` \| `reject` \| `leave_in_review`. Empty when N_human=0 (honest). | `(subject_ref, party_key)` among humans |
+| `us_criminal_bg.gold.name_match_label_pack` | Unlabeled worksheet: open SF `match_queue` cards + hard-negative distractors (existing `court_party`, different last name). `label` NULL. | `(subject_ref, party_key)` in one pack refresh |
+
+Live 2026-09-18: **0** human rows, **40** suggestion/`match_queue` cards. Eval starts empty; pack is built from those 40 + distractors. Not a hire engine.
 
 ## Layering
 
@@ -133,6 +144,8 @@ Same-day re-run MERGEs on `(as_of_date, state_code, source_system)`. `refreshed_
 | `order_report` | `(subject_ref, party_key)` | Type-1 snapshot replace |
 | `match_queue` | `(subject_ref, party_key)` | Type-1 snapshot replace (open subset only) |
 | `source_coverage_metrics` | `(as_of_date, state_code, source_system)` | Daily MERGE (type-1 within a date) |
+| `name_match_eval` | `(subject_ref, party_key)` among latest SF humans | Type-1 snapshot replace (empty when N_human=0) |
+| `name_match_label_pack` | `(subject_ref, party_key)` in a pack refresh | Type-1 snapshot replace (unlabeled) |
 
 `party_key` format (unchanged from Silver): `source_system|state_code|source_record_id|party_role|party_ordinal`  
 `case_report_key` format: `source_system|state_code|source_record_id`
@@ -186,12 +199,14 @@ Gold-owned columns:
 docs/
   gold/NAMING.md          ← this file (contract)
   gold/ACCESS.md          ← serving access + coordinator prove
+  gold/NAME_MATCH_EVAL.md ← sf_name_match_v1 human labels (not UI serving)
   silver/NAMING.md        ← truth / clean contract (Gold reads this)
 gold/
-  schemas/                ← Unity Catalog DDL (three tables)
+  schemas/                ← Unity Catalog DDL (serving + name-match eval)
   transforms/             ← Spark SQL + Python refresh from Silver
   transforms/tests/       ← synthetic fixtures only
   jobs/README.md          ← how to apply (operator)
+ml/name_match/            ← human-eval MLflow entry (held-out human only)
 ```
 
 ## Out of scope (do not put in Gold)
@@ -203,7 +218,8 @@ gold/
 - Scraping WCCA / SF court sites; mutating Bronze or Silver
 - Secrets, PATs, cookies, CAPTCHA tokens, live PII in git
 - Databricks apply of DDL/transform by the cloud agent that opened this PR (operator applies in-workspace)
-- A fourth Gold table, person-id graph, or new report identity grain
+- A fourth **serving** Gold table for report / `/review` / `/metrics` (name-match eval tables are research, not UI serving)
+- Person-id graph, or new report identity grain
 
 ## Versioning
 
@@ -211,4 +227,5 @@ Bump `gold_schema_version` when Gold columns or open-queue / metrics vocabularie
 
 ### Changelog
 
+- `2026-09-18` — `name_match_eval.v1` + `name_match_label_pack.v1` for `sf_name_match_v1`. Human-only labels (`link`/`reject`/`leave_in_review`). Suggestions are not GT. Live N_human=0 → empty eval + unlabeled pack from 40 open SF cards.
 - `2026-09-18` — Initial Gold MVP: `order_report.v1`, `match_queue.v1`, `source_coverage_metrics.v1`. Serving snapshots over live Silver (thin WI, fat SF parties, 40 SF review suggestions). `order_subject` / `search_audit` tolerated as missing.
