@@ -11,8 +11,8 @@ Training labels in this MVP are synthetic pair labels:
   - hard negatives: different last names
 
 This does **not** invent court cases, charges, DOB, or `court_party` rows.
-Optional human `match_decision` rows (review_status='human') may be mixed in
-later; `actor='system:suggestion'` is never treated as ground truth.
+Human GT (when present) lives in `gold.name_match_eval`: `link`/`reject` only;
+`leave_in_review` and `system:suggestion` are never ground truth.
 """
 
 from __future__ import annotations
@@ -42,6 +42,10 @@ from ml.name_match.constants import (
     SOURCE_SYSTEM,
     STATE_CODE,
     SUGGESTION_EXPERIMENT_TAG,
+    EVAL_TABLE,
+    LABEL_LEAVE_IN_REVIEW,
+    LABEL_LINK,
+    LABEL_REJECT,
 )
 from silver.transforms.match_review_sketch import (
     norm_name_token,
@@ -148,10 +152,34 @@ SELECT
   name_first AS party_name_first,
   name_middle AS party_name_middle,
   party_key,
-  confidence_band
+  confidence_band,
+  review_status,
+  actor
 FROM {DECISION_TABLE}
 WHERE review_status = '{REVIEW_STATUS_HUMAN}'
   AND (experiment_tag = '{SUGGESTION_EXPERIMENT_TAG}' OR source_system = '{SOURCE_SYSTEM}')
+"""
+
+EVAL_TABLE_SQL = f"""
+SELECT
+  subject_ref,
+  party_key,
+  label,
+  source_system,
+  state_code,
+  labeled_at,
+  actor,
+  decision_id,
+  confidence_band,
+  experiment_tag,
+  subject_name,
+  raw_name AS party_raw_name,
+  name_last AS party_name_last,
+  name_first AS party_name_first,
+  name_middle AS party_name_middle,
+  party_role,
+  review_status
+FROM {EVAL_TABLE}
 """
 
 
@@ -365,15 +393,36 @@ def build_synthetic_pairs(
     return pairs
 
 
+def _human_gt_from_band_or_label(row: Mapping[str, Any]) -> tuple[int, str] | None:
+    """Map a human row to (0/1, kind) or None if leave_in_review / not GT.
+
+    Gold eval labels win when present. Otherwise MATCH_REVIEW band:
+      auto → link, no-link → reject, review → leave_in_review (exclude).
+    Suggestions must already have been filtered out by the caller.
+    """
+    eval_label = str(row.get("label") or "").strip().lower()
+    band = str(row.get("confidence_band") or "").strip().lower()
+    if eval_label == LABEL_LEAVE_IN_REVIEW or (not eval_label and band == "review"):
+        return None
+    if eval_label == LABEL_REJECT or band == "no-link":
+        return 0, LABEL_HUMAN_REJECT
+    if eval_label == LABEL_LINK or band == "auto":
+        return 1, LABEL_HUMAN_LINK
+    return None
+
+
 def pairs_from_human_decisions(rows: Iterable[Mapping[str, Any]]) -> list[NamePair]:
-    """Only `review_status=human` rows. Suggestions are rejected as labels."""
+    """Only `review_status=human` rows. Suggestions are rejected as labels.
+
+    `leave_in_review` (human band `review`) is not GT and is dropped.
+    """
     pairs: list[NamePair] = []
     for i, row in enumerate(rows):
         status = str(row.get("review_status") or "")
         actor = str(row.get("actor") or "")
         if status == REVIEW_STATUS_SUGGESTION or actor == "system:suggestion":
             continue
-        if status != REVIEW_STATUS_HUMAN:
+        if status and status != REVIEW_STATUS_HUMAN:
             continue
         subject_name = " ".join(str(row.get("subject_name") or "").split())
         party_name = " ".join(
@@ -381,12 +430,10 @@ def pairs_from_human_decisions(rows: Iterable[Mapping[str, Any]]) -> list[NamePa
         )
         if not subject_name or not party_name:
             continue
-        band = str(row.get("confidence_band") or "")
-        if band == "no-link":
-            label, kind = 0, LABEL_HUMAN_REJECT
-        else:
-            # Human confirmed the card (link / review-accept). Still not a hire flag.
-            label, kind = 1, LABEL_HUMAN_LINK
+        mapped = _human_gt_from_band_or_label(row)
+        if mapped is None:
+            continue
+        label, kind = mapped
         pairs.append(
             NamePair(
                 query_id=f"human-{row.get('subject_ref') or i}",
@@ -402,6 +449,20 @@ def pairs_from_human_decisions(rows: Iterable[Mapping[str, Any]]) -> list[NamePa
             )
         )
     return pairs
+
+
+def count_leave_in_review(rows: Iterable[Mapping[str, Any]]) -> int:
+    n = 0
+    for row in rows:
+        status = str(row.get("review_status") or "")
+        actor = str(row.get("actor") or "")
+        if status == REVIEW_STATUS_SUGGESTION or actor == "system:suggestion":
+            continue
+        label = str(row.get("label") or "").strip().lower()
+        band = str(row.get("confidence_band") or "").strip().lower()
+        if label == LABEL_LEAVE_IN_REVIEW or (not label and band == "review"):
+            n += 1
+    return n
 
 
 def inventory_from_counts(rows: Iterable[Mapping[str, Any]]) -> LabelInventory:
@@ -610,3 +671,22 @@ def load_human_pairs(
         print("name_match: human label pull skipped:", exc)
         return []
     return pairs_from_human_decisions(rows)
+
+
+def load_eval_table_rows(
+    *,
+    spark: Any | None = None,
+    warehouse_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Load gold.name_match_eval. Missing table → empty list (honest N=0)."""
+    try:
+        if spark is not None:
+            return spark_query(spark, EVAL_TABLE_SQL)
+        if warehouse_id:
+            return warehouse_query(EVAL_TABLE_SQL, warehouse_id=warehouse_id)
+    except Exception as exc:  # noqa: BLE001 — empty eval is honest
+        print("name_match: gold.name_match_eval missing or unreadable:", exc)
+        print("name_match: treating n_human=0 (not synthesizing GT)")
+        return []
+    print("name_match: no spark/warehouse for eval table; n_human=0 (not synthesizing)")
+    return []

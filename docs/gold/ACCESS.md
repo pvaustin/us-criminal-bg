@@ -14,6 +14,8 @@
 | Employer **report** (one subject × party card) | `order_report` | `subject_ref = :ref` (optional `party_key`) |
 | **`/review`** open queue | `match_queue` | `source_system` + `state_code` (WI vs SF), sort `score DESC`, `age_hours` |
 | **`/metrics`** | `source_coverage_metrics` | latest `as_of_date`, both pilot sources |
+| Name-match **human eval** (research) | `name_match_eval` | `label IN ('link','reject')`; empty while N_human=0 |
+| Name-match **label pack** (research) | `name_match_label_pack` | unlabeled open SF cards + hard negatives |
 
 WI vs SF (pilot source banner — provenance, **not** a verdict):
 
@@ -36,8 +38,9 @@ Do not show hire / no-hire / adverse-action controls on any of these reads.
 5. [`gold/transforms/source_coverage_metrics.sql`](../../gold/transforms/source_coverage_metrics.sql)
 6. [`gold/transforms/order_report.sql`](../../gold/transforms/order_report.sql) — works **without** `silver.order_subject`
 7. Optional, **only if** `silver.order_subject` exists: [`gold/transforms/order_subject_src_from_silver.sql`](../../gold/transforms/order_subject_src_from_silver.sql) then **re-run** step 6
+8. Name-match eval (research; not UI serving): [`gold/schemas/name_match_eval.sql`](../../gold/schemas/name_match_eval.sql) · [`gold/schemas/name_match_label_pack.sql`](../../gold/schemas/name_match_label_pack.sql) then [`gold/transforms/name_match_label_pack.sql`](../../gold/transforms/name_match_label_pack.sql) (after `match_queue`) and [`gold/transforms/name_match_eval.sql`](../../gold/transforms/name_match_eval.sql). See [`NAME_MATCH_EVAL.md`](NAME_MATCH_EVAL.md).
 
-Python cluster path: `python3 gold/transforms/gold_mvp.py --apply` (try-or-skip `order_subject`; never reads `search_audit`).
+Python cluster path: `python3 gold/transforms/gold_mvp.py --apply` (try-or-skip `order_subject`; never reads `search_audit`). Name-match eval/pack: `python3 gold/transforms/name_match_eval.py --apply`. Human MLflow: `python3 ml/name_match/train.py --human-eval` (N=0 logs zeros; does not synthesize GT).
 
 Scratch tables are Delta (`_gold_*`), not TEMP VIEW. Safe to leave or `DROP` after a run; the next refresh `CREATE OR REPLACE`s them.
 
@@ -56,8 +59,10 @@ Do **not** paste live full names, DOB, or street. Expected shape vs live Silver 
 | `gold.order_report` | **0** (no subject/decision yet — honest) | **~40** distinct `(subject_ref, party_key)`; **every** row `has_court_case=false`, `charge_row_count=0` |
 | `gold.match_queue` | **0** | **~40** open (until a human append); `confidence_band='review'` |
 | `gold.source_coverage_metrics` | `case_count=1`, `party_count=6`, suggestions/open/closed = 0 | `case_count=0`, `party_count=77399`, `suggestion_row_count=40`, `open_review_count≈40`, `closed_review_count=0` |
+| `gold.name_match_eval` | n/a (SF-only) | **0** (no humans — honest; suggestions are not GT) |
+| `gold.name_match_label_pack` | n/a (SF-only) | **~40** `open_queue` + hard_negatives; `label` NULL |
 
-SQL to run after apply is in [`gold/jobs/README.md`](../../gold/jobs/README.md).
+SQL to run after apply is in [`gold/jobs/README.md`](../../gold/jobs/README.md). Name-match eval counts (expect **0** humans / **~40+** unlabeled pack rows on 2026-09-18) are in [`ml/name_match/README.md`](../../ml/name_match/README.md).
 
 ## Non-goals
 

@@ -8,7 +8,7 @@ US criminal background verification — court-source data platform.
 |------|-------|------|
 | Bronze | brian bronze | Raw / near-raw landing, naming contract, WCCA ingest skeleton |
 | Silver | silva silver | Cleanses / transforms over Bronze — [`docs/silver/NAMING.md`](docs/silver/NAMING.md) (truth / clean) |
-| Gold | silva silver | Serving marts over Silver — [`docs/gold/NAMING.md`](docs/gold/NAMING.md) (`order_report`, `match_queue`, `source_coverage_metrics`) |
+| Gold | silva silver | Serving marts over Silver — [`docs/gold/NAMING.md`](docs/gold/NAMING.md) (`order_report`, `match_queue`, `source_coverage_metrics`; name-match eval is research) |
 | Plan | court-cto | Technical plan and orchestration |
 
 ## Quick links
@@ -21,7 +21,7 @@ US criminal background verification — court-source data platform.
 - WCCA HTML SSR parseability: [`docs/silver/WCCA_HTML_SSR.md`](docs/silver/WCCA_HTML_SSR.md)
 - Match / review sketch: [`docs/silver/MATCH_REVIEW.md`](docs/silver/MATCH_REVIEW.md)
 - SF name-only match experiment (research, not CRA): [`docs/silver/SF_MATCH_EXPERIMENT.md`](docs/silver/SF_MATCH_EXPERIMENT.md)
-- SF name-match ranking MLflow (`sf_name_match_v1`): [`ml/name_match/README.md`](ml/name_match/README.md)
+- SF name-match ranking + human eval (`sf_name_match_v1`): [`ml/name_match/README.md`](ml/name_match/README.md) · [`docs/gold/NAME_MATCH_EVAL.md`](docs/gold/NAME_MATCH_EVAL.md)
 - Pilot order subject + search audit: [`docs/silver/ORDER_AUDIT.md`](docs/silver/ORDER_AUDIT.md)
 - Source access / ToS notes: [`docs/bronze/ACCESS.md`](docs/bronze/ACCESS.md)
 - VA research (gated named; no anonymized load): [`docs/bronze/ACCESS_VA_COURT_DATA.md`](docs/bronze/ACCESS_VA_COURT_DATA.md)

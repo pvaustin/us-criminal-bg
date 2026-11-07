@@ -188,6 +188,8 @@ A separate scorer/ranker lives in [`ml/name_match/`](../../ml/name_match/README.
 
 It does **not** write `match_decision`, does **not** wire Uma, does **not** auto-link, and does **not** invent court cases. Suggestion cards are not training labels (0 human rows as of this experiment). Driver-local training; Spark or SQL warehouse only to pull name strings.
 
+Human labels (after Uma `/review` appends `review_status='human'`) materialize in Gold: [`docs/gold/NAME_MATCH_EVAL.md`](../gold/NAME_MATCH_EVAL.md). `train.py --human-eval` scores held-out `link`/`reject` only. Live 2026-09-18: **0** humans → empty `name_match_eval`; unlabeled `name_match_label_pack` from the open queue + hard negatives. Do not treat the 40 suggestion cards as GT.
+
 ## Tests (local, synthetic)
 
 ```bash

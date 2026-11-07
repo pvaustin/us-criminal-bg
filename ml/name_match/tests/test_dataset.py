@@ -90,7 +90,7 @@ class DatasetBuilderTests(unittest.TestCase):
                 "actor": "reviewer@example.com",
                 "subject_name": "JANE Q PUBLIC",
                 "party_raw_name": "JANE Q PUBLIC",
-                "confidence_band": "review",
+                "confidence_band": "auto",
                 "subject_ref": "synthetic-human-1",
             },
         ]
@@ -98,6 +98,32 @@ class DatasetBuilderTests(unittest.TestCase):
         self.assertEqual(len(pairs), 1)
         self.assertEqual(pairs[0].label_kind, LABEL_HUMAN_LINK)
         self.assertEqual(pairs[0].label, 1)
+
+    def test_human_review_band_is_leave_in_review_not_gt(self) -> None:
+        rows = [
+            {
+                "review_status": "human",
+                "actor": "reviewer@example.com",
+                "subject_name": "JANE Q PUBLIC",
+                "party_raw_name": "JANE Q PUBLIC",
+                "confidence_band": "review",
+                "label": "leave_in_review",
+                "subject_ref": "synthetic-leave-1",
+            },
+            {
+                "review_status": "human",
+                "actor": "reviewer@example.com",
+                "subject_name": "JANE Q PUBLIC",
+                "party_raw_name": "JOHN MARSHALL FIXTURE",
+                "confidence_band": "no-link",
+                "label": "reject",
+                "subject_ref": "synthetic-rej-1",
+            },
+        ]
+        pairs = pairs_from_human_decisions(rows)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0].label, 0)
+        self.assertEqual(pairs[0].label_kind, "human_reject")
 
     def test_inventory_counts_suggestions_separately(self) -> None:
         inv = inventory_from_counts(

@@ -52,11 +52,20 @@ SOURCE_SYSTEM = "sf_criminal_hf"
 STATE_CODE = "CA"
 PARTY_TABLE = "us_criminal_bg.silver.court_party"
 DECISION_TABLE = "us_criminal_bg.silver.match_decision"
+EVAL_TABLE = "us_criminal_bg.gold.name_match_eval"
+PACK_TABLE = "us_criminal_bg.gold.name_match_label_pack"
 SUGGESTION_EXPERIMENT_TAG = "sf_name_only_research"
+EVAL_NAME = "sf_name_match_v1"
 
 ACTOR_SUGGESTION = "system:suggestion"
 REVIEW_STATUS_SUGGESTION = "suggestion"
 REVIEW_STATUS_HUMAN = "human"
+
+# Gold eval labels (human only). leave_in_review is excluded from GT metrics.
+LABEL_LINK = "link"
+LABEL_REJECT = "reject"
+LABEL_LEAVE_IN_REVIEW = "leave_in_review"
+GT_LABELS = frozenset({LABEL_LINK, LABEL_REJECT})
 
 # MATCH_REVIEW sketch integers on name-only SF parties (dob always absent).
 RULE_EXACT_LAST_FIRST_SCORE = 70  # last 40 + first 30 → review
@@ -70,6 +79,7 @@ LABEL_SYNTHETIC_NEAR_DUP_NEGATIVE = "synthetic_near_duplicate_negative"
 LABEL_SYNTHETIC_HARD_NEGATIVE = "synthetic_hard_negative"
 LABEL_HUMAN_LINK = "human_link"
 LABEL_HUMAN_REJECT = "human_reject"
+LABEL_HUMAN_LEAVE = "human_leave_in_review"
 
 LABEL_SOURCE_SYNTHETIC = "synthetic_pair"
 LABEL_SOURCE_HUMAN = "human_match_decision"
